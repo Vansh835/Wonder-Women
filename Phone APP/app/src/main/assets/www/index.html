@@ -1,0 +1,994 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+(function(){
+  let apiBase = "", apiToken = "";
+  window.setPhoneApiConfig = function(base, token) {
+    apiBase = String(base || "").trim().replace(/\/+$/, "");
+    apiToken = String(token || "").trim();
+  };
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = function(input, init) {
+    const path = typeof input === "string" ? input : input.url;
+    if (typeof path === "string" && path.startsWith("/")) {
+      if (!apiBase) return Promise.reject(new Error("Open Computer API settings and enter the server address."));
+      const options = Object.assign({}, init || {});
+      const headers = new Headers(options.headers || {});
+      if (apiToken) headers.set("X-Safety-Token", apiToken);
+      options.headers = headers;
+      return originalFetch(apiBase + path, options);
+    }
+    return originalFetch(input, init);
+  };
+  window.testPhoneApi = async function() {
+    try {
+      const response = await window.fetch("/pin/status");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return "Connected to the computer API.";
+    } catch (error) {
+      return "Connection failed: " + (error.message || "check address, token, and Wi-Fi");
+    }
+  };
+})();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10191d">
+<title>Women Safety Shield</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+    :root {
+        color-scheme: dark;
+        --accent: #00bfa5;
+        --accent-hover: #008f7a;
+        --app-bg: #10191d;
+        --panel-bg: #172329;
+        --surface-bg: #0f1a1f;
+        --surface-raised: #203038;
+        --line: #31434a;
+        --text: #f3f7f7;
+        --muted: #a8b8bd;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 15px; background: var(--app-bg); display: flex; gap: 15px; height: 100vh; color: var(--text); overflow: hidden; }
+    .panel { position: relative; flex: 1; min-width: 380px; background: var(--panel-bg); padding: 18px; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); display: flex; flex-direction: column; }
+    .map-container { flex: 1.4; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); overflow: hidden; }
+    #map { width: 100%; height: 100%; background: var(--app-bg); }
+
+    .chat-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; border-bottom: 1px solid #3d3d4f; padding-bottom: 10px; flex-wrap: wrap; }
+    .chat-header h2 { margin: 0; color: var(--accent); font-size: 20px; flex-grow: 1; transition: color 0.2s; }
+    .theme-picker { display: flex; align-items: center; gap: 5px; background: #15151c; padding: 5px 8px; border-radius: 20px; border: 1px solid #3d3d4f; }
+    .swatch { width: 16px; height: 16px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: transform 0.15s, border-color 0.15s; padding: 0; }
+    .swatch:hover { transform: scale(1.18); }
+    .swatch.active { border-color: #fff; transform: scale(1.15); }
+    .sos-btn { background: #d50000 !important; padding: 8px 12px; }
+    .sos-btn:hover { background: #ff1744 !important; }
+    #fakePanel { display: none; position: absolute; inset: 0; background: #2a2a35; border-radius: 16px; padding: 20px; z-index: 10; overflow-y: auto; }
+    #fakePanel h3 { margin: 0 0 10px; color: var(--accent); }
+    #fakePanel label { display: block; margin: 10px 0 4px; font-size: 12px; color: #aaa; }
+    #fakePanel input, #fakePanel select { width: 100%; background: #15151c; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 10px; }
+    .fake-btn { background: #3d3d4f !important; padding: 8px 12px; }
+    .fake-btn:hover { background: #505068 !important; }
+
+    #callScreen { display: none; position: fixed; inset: 0; z-index: 1000; flex-direction: column; align-items: center;
+        justify-content: space-between; padding: 70px 20px 60px; color: #fff;
+        background: linear-gradient(#25384d, #0b1017); }
+    .call-top { text-align: center; }
+    .call-avatar { width: 110px; height: 110px; border-radius: 50%; background: #5c6b7a; margin: 0 auto 18px;
+        display: flex; align-items: center; justify-content: center; font-size: 46px; font-weight: 600; }
+    .ringing .call-avatar { animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,255,255,.35); } 100% { box-shadow: 0 0 0 36px rgba(255,255,255,0); } }
+    .call-name { font-size: 32px; font-weight: 500; }
+    .call-status { margin-top: 8px; font-size: 16px; color: #b8c4d0; }
+    .call-buttons { display: flex; gap: 90px; }
+    .call-btn { width: 72px; height: 72px; border-radius: 50%; border: none; font-size: 30px; cursor: pointer; padding: 0; color: #fff; }
+    .call-btn.red { background: #e53935; } .call-btn.red:hover { background: #ff5252; }
+    .call-btn.green { background: #2e7d32; } .call-btn.green:hover { background: #43a047; }
+    /* Quick Route A -> B Dropdown Bar */
+    .quick-route-bar { background: #15151c; border: 1px solid #3d3d4f; border-radius: 10px; padding: 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 8px; }
+    .quick-route-title { font-size: 11px; color: #aaa; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
+    .quick-route-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .quick-route-row select { flex: 1; min-width: 115px; padding: 8px; font-size: 13px; background: #2a2a35; color: #fff; border: 1px solid #444; border-radius: 6px; outline: none; }
+    .quick-route-row select:focus { border-color: var(--accent); }
+    .swap-btn { background: #3d3d4f !important; padding: 7px 10px !important; font-size: 13px; }
+    .swap-btn:hover { background: #505068 !important; }
+    .swap-label { display: none; }
+    .go-btn { padding: 8px 14px !important; font-size: 13px; white-space: nowrap; }
+
+    .chat-box { flex-grow: 1; min-height: 100px; background: var(--surface-bg); border-radius: 10px; padding: 15px; overflow-y: auto; margin-bottom: 10px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; border: 1px solid var(--line); }
+    .message { padding: 10px 14px; border-radius: 8px; max-width: 88%; line-height: 1.4; white-space: pre-wrap; }
+    .user-msg { background: var(--accent); color: white; align-self: flex-end; border-bottom-right-radius: 0; transition: background 0.2s; }
+    .ai-msg { background: var(--surface-raised); color: #e0e0e0; align-self: flex-start; border-bottom-left-radius: 0; border-left: 4px solid var(--accent); transition: border-color 0.2s; }
+    .alert-msg { background: #3b1219; border-left-color: #ff1744 !important; }
+
+    #routes { display: none; max-height: 250px; overflow-y: auto; margin-bottom: 10px; gap: 8px; flex-direction: column; }
+    .route-card { background: #15151c; border: 2px solid #333; border-radius: 10px; padding: 10px 12px; cursor: pointer; font-size: 13px; }
+    .route-card:hover { border-color: #555; }
+    .route-card.selected { border-color: #00e676; }
+    .route-top { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+    .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; color: #000; }
+    .b-good { background: #00e676; } .b-mid { background: #ffd54f; } .b-low { background: #ff8a65; } .b-na { background: #888; }
+    .route-sub { color: #aaa; margin-top: 4px; line-height: 1.35; }
+    .tag { color: #00e676; font-size: 11px; margin-left: 6px; }
+    .route-actions { display: flex; gap: 8px; }
+    .route-actions button { background: #3d3d4f; font-size: 12px; padding: 6px 10px; }
+
+    .input-area { display: flex; gap: 8px; background: #15151c; padding: 5px; border-radius: 8px; border: 1px solid #444; }
+    input[type="text"], textarea { background: transparent; border: none; color: white; font-size: 14px; outline: none; font-family: inherit; }
+    #userInput { flex-grow: 1; padding: 10px; }
+    select { background: #2a2a35; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 0 6px; }
+    button { background: var(--accent); color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+    button:hover { background: var(--accent-hover); }
+    .timer { color: #888; font-size: 11px; text-align: right; margin-top: 5px; min-height: 14px; }
+
+    #sosPanel { display: none; position: absolute; inset: 0; background: #2a2a35; border-radius: 16px; padding: 20px; z-index: 10; overflow-y: auto; }
+    #sosPanel h3 { margin: 0 0 10px; color: #ff1744; }
+    .helpline { display: flex; justify-content: space-between; background: #15151c; padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
+    .helpline a { color: #00e676; font-weight: 700; text-decoration: none; }
+    #sosMsg { width: 100%; height: 90px; background: #15151c; border: 1px solid #444; border-radius: 8px; padding: 8px; resize: none; margin: 6px 0; }
+    #contactInput { width: 100%; background: #15151c; border: 1px solid #444; border-radius: 8px; padding: 10px; margin: 6px 0; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+    .row button { background: #3d3d4f; }
+    .row button.primary { background: var(--accent); }
+    .row button.primary:hover { background: var(--accent-hover); }
+    .small { color: #aaa; font-size: 12px; line-height: 1.4; }
+    a.btnlink { display: inline-block; background: var(--accent); color: #fff; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 13px; transition: background 0.2s; }
+    a.btnlink:hover { background: var(--accent-hover); }
+
+    .pin { width: 26px; height: 26px; line-height: 22px; text-align: center; border-radius: 50%; border: 2px solid #fff; color: #fff; font-weight: 700; font-size: 12px; background: var(--accent); transition: background 0.2s; }
+    .pin.police { background: #2979ff; }
+    .pin.hospital { background: #d50000; }
+    .pin.metro { background: #7c4dff; }
+    .pin.bus { background: #ef6c00; }
+    .route-steps { color: #ccc; margin-top: 6px; white-space: pre-wrap; font-size: 12px; line-height: 1.4; }
+
+
+    /* Welcome / splash screen */
+    #welcomeScreen { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; padding: 28px 24px; text-align: center;
+        background: radial-gradient(ellipse at 50% 30%, #234047 0%, #10191d 55%, #0b1114 100%);
+        opacity: 1; visibility: visible; transition: opacity .35s ease, visibility .35s ease; }
+    #welcomeScreen.leaving { opacity: 0; visibility: hidden; pointer-events: none; }
+    .welcome-mark { width: 108px; height: 108px; display: grid; place-items: center; border-radius: 32px;
+        background: linear-gradient(145deg, var(--accent), #8e24aa); box-shadow: 0 14px 45px rgba(255,64,129,.25);
+        font-size: 54px; margin-bottom: 25px; animation: welcomeFloat 2.5s ease-in-out infinite; }
+    .welcome-title { margin: 0; font-size: clamp(28px, 7vw, 38px); letter-spacing: -.7px; font-weight: 800; }
+    .welcome-title span { color: var(--accent); }
+    .welcome-subtitle { max-width: 330px; margin: 12px 0 24px; color: #c5c2d0; font-size: 15px; line-height: 1.6; }
+    .welcome-points { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 360px; margin-bottom: 30px; }
+    .welcome-chip { border: 1px solid #484253; background: rgba(255,255,255,.045); border-radius: 999px;
+        padding: 8px 11px; color: #e9e5ef; font-size: 12px; }
+    #launchAppButton { width: min(100%, 330px); min-height: 52px; border-radius: 14px; font-size: 15px;
+        background: var(--accent); box-shadow: 0 8px 25px rgba(255,64,129,.22); }
+    #launchAppButton:active { transform: scale(.98); }
+    .welcome-loading { margin-top: 18px; color: #888494; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; }
+    .loading-dots { display: inline-flex; gap: 4px; margin-left: 5px; vertical-align: middle; }
+    .loading-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: dotPulse 1s infinite ease-in-out; }
+    .loading-dots i:nth-child(2) { animation-delay: .15s; } .loading-dots i:nth-child(3) { animation-delay: .3s; }
+    .welcome-footnote { position: absolute; bottom: max(18px, env(safe-area-inset-bottom)); color: #777382; font-size: 11px; }
+    @keyframes welcomeFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+    @keyframes dotPulse { 0%,80%,100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+    .mobile-nav, #mobileRoutePanel { display: none; }
+    @media (max-width: 760px) {
+        html, body { width: 100%; height: 100%; height: 100dvh; }
+        body { display: block; padding: 0; overflow: hidden; }
+        .panel { position: absolute; inset: 0; width: 100%; min-width: 0; height: 100%;
+            padding: max(12px, env(safe-area-inset-top)) 14px calc(88px + env(safe-area-inset-bottom));
+            border-radius: 0; box-shadow: none; gap: 8px; }
+        .chat-header { flex: 0 0 auto; min-height: 52px; gap: 8px; padding: 4px 0 10px; margin: 0; }
+        .chat-header h2 { font-size: 18px; }
+        .chat-header .fake-btn, .chat-header .sos-btn, .theme-picker { display: none; }
+        .quick-route-bar { flex: 0 0 auto; padding: 10px 12px; border-radius: 14px; }
+        .quick-route-title { font-size: 14px; letter-spacing: 0; text-transform: none; color: var(--text); }
+        .quick-route-title span + span { margin-left: auto; margin-right: 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
+        .quick-route-bar summary { min-height: 42px; cursor: pointer; list-style: none; }
+        .quick-route-bar summary::-webkit-details-marker { display: none; }
+        .quick-route-bar summary::after { content: '+'; color: var(--accent); font-size: 22px; line-height: 1; }
+        .quick-route-bar[open] summary::after { content: '−'; }
+        .quick-route-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+        .quick-route-row select { min-width: 0; width: 100%; }
+        .quick-route-row select, .quick-route-row button { min-height: 50px; font-size: 15px; }
+        .quick-route-row .swap-btn { width: 100%; }
+        .swap-label { display: inline; margin-left: 6px; }
+        .quick-route-row .go-btn { grid-column: 1 / -1; width: 100%; min-height: 50px; }
+        .chat-box { flex: 1 1 auto; min-height: 0; padding: 14px 12px; font-size: 15px; border-radius: 16px; }
+        .message { max-width: 96%; }
+        .input-area { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, auto); gap: 8px; padding: 8px; border-radius: 16px; }
+        #userInput { grid-column: 1 / -1; width: 100%; min-width: 0; min-height: 48px; padding: 12px; font-size: 16px; }
+        #mode, .input-area > button { min-width: 0; min-height: 50px; font-size: 14px; }
+        .input-area > button { padding: 10px 16px; }
+        .timer { flex: 0 0 auto; min-height: 14px; margin-top: -4px; }
+        .map-container { display: none; position: absolute; inset: 0; width: 100%; height: 100%;
+            border-radius: 0; box-shadow: none; }
+        #map { height: 100%; }
+        body[data-mobile-view="map"] #leftPanel { display: none; }
+        body[data-mobile-view="map"] .map-container { display: block; }
+        body[data-mobile-view="safety"] #leftPanel { display: block; }
+        body[data-mobile-view="safety"] .map-container { display: none; }
+        body[data-mobile-view="safety"] #sosPanel { display: block; position: absolute; inset: 0; z-index: 1100;
+            padding: max(14px, env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom));
+            border-radius: 0; background: var(--app-bg); }
+        #sosPanel h3 { display: inline-block; margin: 8px 0 4px; font-size: 22px; color: #ff7575; }
+        #sosPanel h4 { margin: 24px 0 8px; font-size: 16px; }
+        #sosPanel .small { font-size: 14px; color: var(--muted); }
+        .safety-panel-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .safety-panel-top button { min-width: 76px; min-height: 44px; background: var(--surface-raised); }
+        .emergency-call { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0;
+            padding: 14px; border: 1px solid #743a40; border-radius: 16px; background: #321d22; color: #fff; text-decoration: none; }
+        .emergency-call strong { display: block; font-size: 16px; }
+        .emergency-call span { color: #ff999d; font-size: 13px; }
+        .emergency-call b { display: grid; place-items: center; flex: 0 0 58px; height: 58px; border-radius: 50%; background: #d92d3a; color: #fff; font-size: 19px; }
+        .helpline { min-height: 58px; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-bg); }
+        .helpline a { display: grid; place-items: center; min-width: 72px; min-height: 44px; border-radius: 10px; background: var(--surface-raised); color: #8de6d9; }
+        #sosPanel .row { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 10px 0; }
+        #sosPanel .row button, #sosPanel .row .btnlink, #sosPanel .safety-tool-button { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 52px; margin: 0; border-radius: 12px; font-size: 15px; }
+        #sosMsg { height: 96px; margin: 4px 0; padding: 12px; border-radius: 12px; font-size: 15px; line-height: 1.45; }
+        #contactInput { min-height: 52px; margin: 4px 0; padding: 12px; border-radius: 12px; font-size: 16px; }
+        #mobileThemeSelect { width: 100%; min-height: 50px; padding: 0 12px; font-size: 15px; }
+        .mobile-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); position: fixed; z-index: 1200;
+            left: 0; right: 0; bottom: 0; gap: 8px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+            background: #121d22; border-top: 1px solid var(--line); }
+        .mobile-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            min-width: 0; min-height: 64px; padding: 7px 4px; border-radius: 14px; background: transparent; color: var(--muted); font-size: 12px; }
+        .mobile-nav button.active { background: #1c3738; color: #a4f0e4; outline: 1px solid #2c5a56; }
+        .mobile-nav .nav-icon { font-size: 19px; line-height: 1; }
+        #showMobileRoutes { display: none; position: fixed; z-index: 650; left: 16px;
+            bottom: calc(82px + env(safe-area-inset-bottom)); min-height: 46px; padding: 0 16px;
+            border: 1px solid #4d7773; border-radius: 24px; background: rgba(16, 25, 29, .96);
+            color: #a4f0e4; font-size: 14px; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+        #mobileRoutePanel { display: none; position: absolute; z-index: 700; left: 10px; right: 10px;
+            bottom: calc(68px + env(safe-area-inset-bottom)); max-height: 43dvh; overflow-y: auto;
+            overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+            padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: rgba(16, 25, 29, .97);
+            box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+        .mobile-route-heading { display: flex; justify-content: space-between; align-items: center;
+            margin: 0 0 6px; color: #fff; font-size: 14px; }
+        .mobile-route-heading button { padding: 5px 10px; background: #3d3d4f; }
+        #routes { max-height: 34dvh; margin-bottom: 0; }
+        #routes .route-actions { flex-wrap: wrap; }
+        #routes .route-card { padding: 8px; }
+        #callScreen { z-index: 2000; padding: max(70px, env(safe-area-inset-top)) 20px max(48px, env(safe-area-inset-bottom)); }
+        .call-buttons { gap: clamp(48px, 18vw, 90px); }
+        .call-btn { width: 78px; height: 78px; }
+        #fakePanel { padding: max(18px, env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom)); border-radius: 0; }
+        #fakePanel input, #fakePanel select, #fakePanel button { min-height: 50px; font-size: 15px; }
+        #fakePanel .row { display: grid; grid-template-columns: 1fr; }
+        button, a, select { touch-action: manipulation; }
+        button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
+            outline: 3px solid #a4f0e4; outline-offset: 2px;
+        }
+    }
+</style>
+</head>
+<body>
+<div id="welcomeScreen" role="dialog" aria-label="Welcome to Safety Shield AI" aria-modal="true">
+    <div class="welcome-mark" aria-hidden="true">&#x1F6E1;&#xFE0F;</div>
+    <h1 class="welcome-title">Safety Shield <span>AI</span></h1>
+    <p class="welcome-subtitle">A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.</p>
+    <div class="welcome-points">
+        <span class="welcome-chip">&#x1F5FA;&#xFE0F; Safer routes</span>
+        <span class="welcome-chip">&#x1F4AC; AI travel help</span>
+        <span class="welcome-chip">&#x1F198; SOS tools</span>
+    </div>
+    <button id="launchAppButton" onclick="enterSafetyShield()">Get Started &nbsp; &#x2192;</button>
+    <div class="welcome-loading">Safety tools ready <span class="loading-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+    <div class="welcome-footnote">Stay aware. Stay connected. Stay safe.</div>
+</div>
+
+<div class="panel" id="leftPanel">
+    <div class="chat-header">
+        <span>&#x1F6E1;&#xFE0F;</span>
+        <h2>Safety Shield AI</h2>
+        <div class="theme-picker" id="themePicker" title="Change app color"></div>
+        <button class="fake-btn" onclick="openFake()">&#x1F4DE; Fake Call</button>
+        <button class="sos-btn" onclick="toggleSOS(true)">&#x1F198; SOS</button>
+    </div>
+
+    <!-- Quick Route A & B Dropdown Selector -->
+    <details class="quick-route-bar">
+        <summary class="quick-route-title"><span>Quick route</span><span>Choose saved places</span></summary>
+        <div class="quick-route-row">
+            <select id="pointA" title="Start point (A)"></select>
+            <button class="swap-btn" onclick="swapDropdownPlaces()" title="Swap Start & Destination" aria-label="Swap start and destination"><span aria-hidden="true">&#x21C4;</span><span class="swap-label">Swap start and destination</span></button>
+            <select id="pointB" title="Destination point (B)"></select>
+            <button class="go-btn" onclick="planFromDropdowns()">Find Route</button>
+        </div>
+    </details>
+
+    <div class="chat-box" id="chatBox"></div>
+
+    <div id="routes"></div>
+
+    <div class="input-area">
+        <input type="text" id="userInput" placeholder='Or type any trip / question...' onkeypress="if(event.key==='Enter') sendChatMessage()">
+        <select id="mode" title="Travel mode">
+            <option value="DRIVING">Driving</option>
+            <option value="WALKING">Walking</option>
+            <option value="TRANSIT">Metro + walk</option>
+            <option value="BUS">Bus + walk</option>
+        </select>
+        <button onclick="sendChatMessage()">Send</button>
+    </div>
+    <div id="timeTaken" class="timer"></div>
+
+    <!-- SOS overlay -->
+    <div id="sosPanel">
+        <div class="safety-panel-top">
+            <h3>&#x1F198; Safety tools</h3>
+            <button onclick="toggleSOS(false)">Back</button>
+        </div>
+        <p class="small">If you are in immediate danger, move toward other people and call emergency services now.</p>
+        <a class="emergency-call" href="tel:112"><span><strong>Call emergency services</strong><span>Immediate help in India</span></span><b>112</b></a>
+        <div id="helplines"></div>
+
+        <h4>Share my location</h4>
+        <div class="row">
+            <button class="primary" onclick="getLocation()">&#x1F4CD; Get my location</button>
+            <button onclick="copySOS()">Copy message</button>
+        </div>
+        <textarea id="sosMsg" readonly>I need help. Please call me or contact the police.</textarea>
+        <div id="locStatus" class="small"></div>
+
+        <h4>Trusted contact</h4>
+        <input id="contactInput" type="text" placeholder="Phone number, e.g. +919876543210">
+        <div class="row">
+            <button onclick="saveContact()">Save contact</button>
+            <a class="btnlink" id="smsLink" href="#">Send SOS by SMS</a>
+        </div>
+        <p class="small">SMS opens your messaging app with the message ready to send.</p>
+        <h4>Other safety tools</h4>
+        <button class="safety-tool-button fake-btn" onclick="toggleSOS(false); openFake()">&#x1F4DE; Set up a fake call</button>
+        <h4>Appearance</h4>
+        <select id="mobileThemeSelect" aria-label="App color theme" onchange="setTheme(this.value)">
+            <option value="teal">Teal</option><option value="pink">Pink</option><option value="purple">Purple</option>
+            <option value="blue">Blue</option><option value="orange">Orange</option><option value="green">Green</option>
+        </select>
+    </div>
+<div id="fakePanel">
+    <h3>&#x1F4DE; Fake incoming call</h3>
+    <p class="small">The phone rings like a real call. Answer it and a "father" voice speaks on the speaker, so anyone nearby hears someone is on the way. Turn the volume up first.</p>
+    <label>Caller name</label>
+    <input id="fakeName" type="text" value="Papa">
+    <label>Ring after</label>
+    <select id="fakeDelay">
+        <option value="0">Right now</option><option value="5">5 seconds</option>
+        <option value="10">10 seconds</option><option value="30">30 seconds</option>
+    </select>
+    <label>Voice</label>
+    <select id="fakeVoice"></select>
+    <label>Built-in voice language</label>
+    <select id="fakeLang"><option value="hi">Hindi</option><option value="en">English</option></select>
+    <div class="row">
+        <button class="primary" onclick="startFake()">Start fake call</button>
+        <button onclick="document.getElementById('fakePanel').style.display='none'">Close</button>
+    </div>
+    <p class="small">Put your own recordings (.mp3 / .wav) in the <b>fake_call_audio</b> folder, then reopen this panel. This is only a deterrent. If you are in real danger, call 112 or press SOS.</p>
+</div>
+</div>
+<div id="callScreen">
+    <div class="call-top">
+        <div class="call-avatar" id="callAvatar">P</div>
+        <div class="call-name" id="callName">Papa</div>
+        <div class="call-status" id="callStatus">Incoming call...</div>
+    </div>
+    <div class="call-buttons" id="callBtns">
+        <button class="call-btn red" onclick="endFake()" title="Decline">&#x1F4F5;</button>
+        <button class="call-btn green" id="acceptBtn" onclick="acceptFake()" title="Accept">&#x1F4DE;</button>
+    </div>
+</div>
+<div class="map-container">
+    <div id="map"></div>
+    <button id="showMobileRoutes" onclick="toggleMobileRoutes(true)" aria-expanded="false">Show route scores</button>
+    <div id="mobileRoutePanel">
+        <div class="mobile-route-heading"><strong>Route options</strong><button onclick="toggleMobileRoutes(false)">Hide</button></div>
+    </div>
+</div>
+<nav class="mobile-nav" aria-label="Main navigation">
+    <button id="mobileChatButton" class="active" onclick="setMobileView('chat')"><span class="nav-icon">&#x1F4AC;</span><span>Chat</span></button>
+    <button id="mobileMapButton" onclick="setMobileView('map')"><span class="nav-icon">&#x1F5FA;</span><span>Map</span></button>
+    <button id="mobileSafetyButton" onclick="setMobileView('safety')"><span class="nav-icon">&#x1F198;</span><span>Safety</span></button>
+</nav>
+
+<script>
+function enterSafetyShield() {
+    const screen = document.getElementById('welcomeScreen');
+    if (!screen) return;
+    screen.classList.add('leaving');
+    window.setTimeout(() => { screen.style.display = 'none'; }, 380);
+}
+const HELPLINES = [{"name": "Emergency (all services)", "number": "112"}, {"name": "Women Helpline", "number": "1091"}, {"name": "Women Helpline", "number": "181"}, {"name": "Child Helpline", "number": "1098"}, {"name": "Police", "number": "100"}, {"name": "Cyber Crime", "number": "1930"}, {"name": "National Commission for Women", "number": "7827170170"}];
+const COMMON_PLACES = ["Rohini", "Kanjhawala", "Moti Nagar", "Nangloi", "Punjabi Bagh", "Pitampura", "Janakpuri", "Rajouri Garden", "Dwarka", "Connaught Place", "Karol Bagh", "Hauz Khas", "Saket", "Lajpat Nagar", "Chandni Chowk", "Kashmere Gate", "Vasant Kunj", "Paschim Vihar", "Shalimar Bagh", "Model Town", "Mayur Vihar", "Preet Vihar", "Laxmi Nagar", "Shahdara", "Nehru Place"];
+
+    const THEMES = [
+    { id: 'pink',   name: 'Pink',   accent: '#ff4081', hover: '#f50057' },
+    { id: 'purple', name: 'Purple', accent: '#9c27b0', hover: '#7b1fa2' },
+    { id: 'blue',   name: 'Blue',   accent: '#2979ff', hover: '#1565c0' },
+    { id: 'teal',   name: 'Teal',   accent: '#00bfa5', hover: '#00897b' },
+    { id: 'orange', name: 'Orange', accent: '#ff9100', hover: '#ff6d00' },
+    { id: 'green',  name: 'Green',  accent: '#00c853', hover: '#009624' }
+];
+
+let map = null;
+let routeLines = [], mapMarkers = [], placeMarkers = [], lastDetail = -1, chatHistory = [];
+let currentRoutes = [], lastTrip = null, lastPos = null;
+
+/* ---------- small helpers (all text via textContent => no XSS) ---------- */
+function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
+function addMsg(who, text, extraCls) {
+    const box = document.getElementById('chatBox');
+    const d = el('div', 'message ' + (who === 'user' ? 'user-msg' : 'ai-msg') + (extraCls ? ' ' + extraCls : ''), text);
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    return d;
+}
+async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = t; document.body.appendChild(ta); ta.select();
+        let ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
+        ta.remove(); return ok;
+    }
+}
+
+/* ---------- theme switcher ---------- */
+function setTheme(themeId) {
+    const t = THEMES.find(x => x.id === themeId) || THEMES[0];
+    document.documentElement.style.setProperty('--accent', t.accent);
+    document.documentElement.style.setProperty('--accent-hover', t.hover);
+    document.querySelectorAll('.swatch').forEach(s => {
+        s.classList.toggle('active', s.dataset.theme === t.id);
+    });
+    const mobileTheme = document.getElementById('mobileThemeSelect');
+    if (mobileTheme) mobileTheme.value = t.id;
+    try { localStorage.setItem('app_theme', t.id); } catch (e) {}
+}
+
+function initThemes() {
+    const picker = document.getElementById('themePicker');
+    THEMES.forEach(t => {
+        const btn = document.createElement('button');
+        btn.className = 'swatch';
+        btn.dataset.theme = t.id;
+        btn.title = t.name + ' theme';
+        btn.style.background = t.accent;
+        btn.onclick = () => setTheme(t.id);
+        picker.appendChild(btn);
+    });
+    let saved = 'teal';
+    try { saved = localStorage.getItem('app_theme') || 'teal'; } catch (e) {}
+    setTheme(saved);
+}
+
+/* ---------- A & B Delhi places dropdowns ---------- */
+function initPlaceDropdowns() {
+    const selA = document.getElementById('pointA');
+    const selB = document.getElementById('pointB');
+    selA.appendChild(new Option('Point A (Start)...', ''));
+    selB.appendChild(new Option('Point B (Destination)...', ''));
+    COMMON_PLACES.forEach(p => {
+        selA.appendChild(new Option(p, p));
+        selB.appendChild(new Option(p, p));
+    });
+    selA.value = 'Rohini';
+    selB.value = 'Kanjhawala';
+}
+
+function swapDropdownPlaces() {
+    const selA = document.getElementById('pointA');
+    const selB = document.getElementById('pointB');
+    const tmp = selA.value;
+    selA.value = selB.value;
+    selB.value = tmp;
+}
+
+async function planFromDropdowns() {
+    const a = document.getElementById('pointA').value;
+    const b = document.getElementById('pointB').value;
+    const mode = document.getElementById('mode').value;
+    if (!a || !b) {
+        addMsg('ai', 'Please select both Point A (Start) and Point B (Destination) from the dropdowns.', 'alert-msg');
+        return;
+    }
+    if (a === b) {
+        addMsg('ai', 'Point A and Point B are the same place. Please choose two different places.', 'alert-msg');
+        return;
+    }
+    addMsg('user', a + ' to ' + b + ' (' + mode.toLowerCase() + ')');
+    await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode);
+}
+
+/* ---------- map (Leaflet + OpenStreetMap data, no API key) ---------- */
+function pin(letter, cls) {
+    return L.divIcon({ className: '', html: '<div class="pin ' + (cls || '') + '">' + letter + '</div>',
+                       iconSize: [26, 26], iconAnchor: [13, 13] });
+}
+function initMap() {
+    if (typeof L === 'undefined') {
+        addMsg('ai', 'The map library could not load. Check your internet connection and restart.', 'alert-msg');
+        return;
+    }
+    map = L.map('map').setView([28.6139, 77.2090], 11);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    setTimeout(() => map.invalidateSize(), 300);
+}
+function clearMap() {
+    routeLines.forEach(l => l.remove()); routeLines = [];
+    mapMarkers.forEach(m => m.remove()); mapMarkers = [];
+    placeMarkers.forEach(m => m.remove()); placeMarkers = [];
+    currentRoutes = [];
+    const r = document.getElementById('routes'); r.innerHTML = ''; r.style.display = 'none';
+}
+
+/* ---------- route flow (routing + scoring happen in Python) ---------- */
+async function planRoute(origin, destination, mode) {
+    if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
+    clearMap();
+    const status = addMsg('ai', 'Finding routes and checking places along each one. The first trip in a new area can take up to a minute; later trips there are much faster...');
+    let data;
+    try {
+        const resp = await fetch('/plan_route', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ origin, destination, mode })
+        });
+        data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
+    } catch (e) {
+        status.textContent = e.message || 'Route lookup failed.';
+        status.classList.add('alert-msg');
+        return;
+    }
+
+    currentRoutes = data.routes;
+    lastTrip = { a: data.start, b: data.end, mode };
+    drawRoutes(data);
+    setMobileView('map');
+    toggleMobileRoutes(true);
+
+    let summary = data.scored
+        ? 'Recommended: Route ' + (data.best + 1) + ' (score ' + data.routes[data.best].score + '/100).'
+        : 'Place data was unavailable (' + (data.data_error || 'unknown reason') + '), so routes are ranked by time only. Free servers can be busy, so try again in a minute.';
+    if (data.summary) summary = data.summary;
+    if (data.note) summary += ' ' + data.note;
+    if (data.night && data.scored && !data.metro_closed)
+        summary += ' It is night, so police and hospitals (open 24 hours) count more than shops.';
+    summary += '\n\nRough guide from map data, not live crime data. Trust your instincts and share your trip with someone.';
+    status.textContent = summary;
+    if (data.metro_closed) status.classList.add('alert-msg');
+    document.getElementById('chatBox').scrollTop = 1e9;
+    if (data.routes.length > 1 && data.scored && !data.metro_closed) explainRoutes(data);
+}
+
+async function explainRoutes(data) {
+    const note = addMsg('ai', 'Summarising these routes in plain words...');
+    try {
+        const slim = data.routes.map(r => ({ title: r.title, secs: r.secs, km: r.km, score: r.score, counts: r.counts,
+            isolated: r.isolated, sampled: r.sampled, lit_pct: r.lit_pct }));
+        const resp = await fetch('/explain_route', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ routes: slim, best: data.best, scored: data.scored, night: data.night })
+        });
+        const j = await resp.json();
+        if (!j.text) throw new Error('empty');
+        note.textContent = j.text;
+    } catch (e) {
+        note.remove();
+    }
+    document.getElementById('chatBox').scrollTop = 1e9;
+}
+
+function drawRoutes(data) {
+    const box = document.getElementById('routes');
+    box.innerHTML = ''; box.style.display = 'flex';
+
+    lastDetail = -1;
+    function showDetails(i) {   // full steps go in the chat, not on the card
+        const r = data.routes[i];
+        if (!r.steps || i === lastDetail) return;
+        lastDetail = i;
+        let t = (r.title || 'Route ' + (i + 1)) + ' - about ' + Math.round(r.secs / 60) + ' min'
+            + (r.via ? ' - ' + r.via + (r.changes ? ' (' + r.changes + ' change' + (r.changes > 1 ? 's' : '') + ')' : ' (no change)') : '')
+            + '\n\n' + r.steps.join('\n');
+        if (r.score !== null) {
+            t += '\n\nOn your walks: ' + r.counts.police + ' police, ' + r.counts.hospital + ' hospital, ' + r.counts.other
+                + ' shops/stations nearby. ' + r.isolated + ' of ' + r.sampled + ' spots looked empty.';
+            if (r.lit_pct !== null && r.lit_pct !== undefined)
+                t += r.lit_pct > 0 ? ' Street lamps mapped near ' + r.lit_pct + '% of the walks.' : ' No street lamps mapped nearby.';
+        }
+        addMsg('ai', t);
+    }
+
+    data.routes.forEach((r, i) => {
+        let line;
+        if (r.segments) {   // transit segments keep their own colours
+            const parts = r.segments.map(sg => L.polyline(sg.coords, sg.type === 'walk'
+                ? { color: '#0288d1', weight: 7, opacity: 1, dashArray: '1 12', lineCap: 'round' }
+                : { color: sg.colour || '#7c4dff', weight: 7, opacity: 0.95 }));
+            line = L.featureGroup(parts).addTo(map);
+            line.setStyle = () => line;
+            line._isGroup = true;
+        } else {
+            line = L.polyline(r.coords, { color: '#888', weight: 5, opacity: 0.7 }).addTo(map);
+        }
+        line.on('click', () => { selectRoute(i); showDetails(i); });
+        routeLines.push(line);
+
+        const card = el('div', 'route-card');
+        card.addEventListener('click', () => { selectRoute(i); showDetails(i); });
+        const top = el('div', 'route-top');
+        const left = el('span', '', (r.title || 'Route ' + (i + 1)) + ' - ' + Math.round(r.secs / 60) + ' min - ' + r.km.toFixed(1) + ' km');
+        if (i === data.best && data.scored && (!r.segments || data.routes.length > 1)) left.appendChild(el('span', 'tag', 'RECOMMENDED'));
+        top.appendChild(left);
+        const cls = r.score === null ? 'b-na' : r.score >= 65 ? 'b-good' : r.score >= 40 ? 'b-mid' : 'b-low';
+        top.appendChild(el('span', 'badge ' + cls, r.score === null ? 'n/a' : r.score + '/100'));
+        card.appendChild(top);
+        if (r.via) card.appendChild(el('div', 'route-sub', r.via + (r.changes === undefined ? '' : r.changes ? ' - ' + r.changes + ' change' + (r.changes > 1 ? 's' : '') : ' - no change')));
+        card.appendChild(el('div', 'route-sub', r.score === null ? 'No place data available'
+            : r.counts.police + ' police, ' + r.counts.hospital + ' hospital nearby - ' + r.isolated + ' of ' + r.sampled + ' spots looked empty'));
+        box.appendChild(card);
+    });
+
+    const actions = el('div', 'route-actions');
+    const share = el('button', '', 'Copy trip link');
+    share.addEventListener('click', async () => {
+        const t = lastTrip; if (!t) return;
+        const engine = t.mode === 'WALKING' ? 'fossgis_osrm_foot' : 'fossgis_osrm_car';
+        const url = (t.mode === 'TRANSIT' || t.mode === 'BUS')
+            ? 'https://www.google.com/maps/dir/?api=1&origin=' + t.a.lat + ',' + t.a.lon
+              + '&destination=' + t.b.lat + ',' + t.b.lon + '&travelmode=transit'
+            : 'https://www.openstreetmap.org/directions?engine=' + engine
+              + '&route=' + encodeURIComponent(t.a.lat + ',' + t.a.lon + ';' + t.b.lat + ',' + t.b.lon);
+        share.textContent = (await copyText(url)) ? 'Copied! Send it to a trusted contact' : 'Copy failed';
+    });
+    actions.appendChild(share);
+    const how = el('button', '', 'How is this scored?');
+    how.addEventListener('click', () => addMsg('ai',
+        'How scoring works: along each route I check 5 to 10 spots for nearby police stations (worth the most), hospitals, '
+        + 'shops, fuel stations, transit stops and ATMs from OpenStreetMap. A spot with nothing nearby counts as empty and lowers '
+        + 'the score, more so at night, when places that close early count for less. Being slower costs only a few points, because safety matters more than time. '
+        + 'Mapped street lamps can add a small bonus, and missing lamp data never lowers a score. For Metro and Bus options, only the walks '
+        + 'to and from transit stops are scored. This is NOT live crime data, so treat it as a rough guide.'));
+    actions.appendChild(how);
+    box.appendChild(actions);
+
+    mapMarkers.push(L.marker([data.start.lat, data.start.lon], { icon: pin('A') }).addTo(map));
+    mapMarkers.push(L.marker([data.end.lat, data.end.lon], { icon: pin('B') }).addTo(map));
+    selectRoute(data.best);
+    showDetails(data.best);
+}
+
+function selectRoute(i) {
+    routeLines.forEach((l, k) => {
+        if (l._isGroup) {   // metro options: show only the chosen one
+            if (k === i) { if (!map.hasLayer(l)) l.addTo(map); l.bringToFront(); } else map.removeLayer(l);
+            return;
+        }
+        l.setStyle(k === i ? { color: '#00e676', weight: 7, opacity: 1 } : { color: '#888', weight: 5, opacity: 0.7 });
+        if (k === i) l.bringToFront();
+    });
+    document.querySelectorAll('.route-card').forEach((c, k) => c.classList.toggle('selected', k === i));
+
+    placeMarkers.forEach(m => m.remove()); placeMarkers = [];
+    currentRoutes[i].key.forEach(p => {
+        const m = L.marker([p.lat, p.lon], { icon: pin(p.kind === 'police' ? 'P' : 'H', p.kind), zIndexOffset: -500 }).addTo(map);
+        m.bindTooltip(el('span', '', (p.name || p.kind) + ' (' + p.kind + ')'));
+        placeMarkers.push(m);
+    });
+    (currentRoutes[i].stations || []).forEach(st => {
+        const m = L.marker([st.lat, st.lon], { icon: pin(st.kind === 'bus' ? '🚌' : 'M', st.kind === 'bus' ? 'bus' : 'metro'), zIndexOffset: 1000 }).addTo(map);
+        const label = st.role === 'get on' ? 'Get on: ' : st.role === 'get off' ? 'Get off: ' : 'Change: ';
+        m.bindTooltip(label + st.name, { permanent: true, direction: 'top', offset: [0, -14] });
+        placeMarkers.push(m);
+    });
+    map.fitBounds(routeLines[i].getBounds(), { padding: [30, 30] });
+}
+
+function setMobileView(view) {
+    if (!window.matchMedia('(max-width: 760px)').matches) return;
+    const activeView = ['map', 'safety'].includes(view) ? view : 'chat';
+    document.body.dataset.mobileView = activeView;
+    const views = { mobileChatButton: 'chat', mobileMapButton: 'map', mobileSafetyButton: 'safety' };
+    Object.entries(views).forEach(([id, name]) => {
+        const button = document.getElementById(id);
+        button.classList.toggle('active', activeView === name);
+        button.setAttribute('aria-current', activeView === name ? 'page' : 'false');
+    });
+    toggleSOS(activeView === 'safety');
+    if (view === 'map' && map) setTimeout(() => map.invalidateSize(), 100);
+}
+
+function toggleMobileRoutes(show) {
+    const panel = document.getElementById('mobileRoutePanel');
+    const button = document.getElementById('showMobileRoutes');
+    const mobile = window.matchMedia('(max-width: 760px)').matches;
+    const visible = mobile && show && currentRoutes.length > 0;
+    panel.style.display = visible ? 'block' : 'none';
+    button.style.display = mobile && currentRoutes.length > 0 && !visible ? 'block' : 'none';
+    button.setAttribute('aria-expanded', visible ? 'true' : 'false');
+}
+
+function syncMobileLayout() {
+    const routes = document.getElementById('routes');
+    const panel = document.getElementById('mobileRoutePanel');
+    const mobile = window.matchMedia('(max-width: 760px)').matches;
+    const quickRoute = document.querySelector('.quick-route-bar');
+    quickRoute.open = !mobile;
+    if (mobile && routes.parentElement !== panel) panel.appendChild(routes);
+    else if (!mobile && routes.parentElement !== document.getElementById('leftPanel')) {
+        document.getElementById('leftPanel').insertBefore(routes, document.querySelector('.input-area'));
+        panel.style.display = 'none';
+        delete document.body.dataset.mobileView;
+    }
+    if (mobile && !document.body.dataset.mobileView) document.body.dataset.mobileView = 'chat';
+    if (!mobile) {
+        document.getElementById('sosPanel').style.display = 'none';
+        document.getElementById('mobileChatButton').classList.add('active');
+        document.getElementById('mobileMapButton').classList.remove('active');
+        document.getElementById('mobileSafetyButton').classList.remove('active');
+    }
+}
+
+/* ---------- chat ---------- */
+async function sendChatMessage() {
+    const input = document.getElementById('userInput');
+    const text = input.value.trim();
+    if (!text) return;
+    addMsg('user', text);
+    input.value = '';
+    const thinking = addMsg('ai', 'Thinking...');
+    const t0 = performance.now();
+    try {
+        const resp = await fetch('/chat_query', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, history: chatHistory.slice(-6) })
+        });
+        const data = await resp.json();
+        thinking.textContent = data.ai_response;
+        chatHistory.push({ role: 'user', content: text }, { role: 'assistant', content: data.ai_response });
+        if (chatHistory.length > 12) chatHistory = chatHistory.slice(-12);
+        document.getElementById('timeTaken').textContent = 'Replied in ' + ((performance.now() - t0) / 1000).toFixed(2) + ' s';
+        if (data.emergency) {
+            thinking.classList.add('alert-msg');
+            toggleSOS(true);
+        } else if (data.has_route) {
+            await planRoute(data.origin, data.destination, document.getElementById('mode').value);
+        }
+    } catch (e) {
+        thinking.textContent = 'Could not reach the local assistant. Is the app still running?';
+    }
+    document.getElementById('chatBox').scrollTop = 1e9;
+}
+
+/* ---------- SOS ---------- */
+function buildSOSText() {
+    let t = 'I need help. Please call me now or contact the police.';
+    if (lastPos) t += ' My location: https://www.google.com/maps?q=' + lastPos.lat + ',' + lastPos.lng;
+    t += ' (sent ' + new Date().toLocaleString() + ')';
+    return t;
+}
+function refreshSOS() {
+    document.getElementById('sosMsg').value = buildSOSText();
+    const num = (document.getElementById('contactInput').value || '').trim();
+    document.getElementById('smsLink').href = 'sms:' + num + '?body=' + encodeURIComponent(buildSOSText());
+}
+function toggleSOS(show) {
+    document.getElementById('sosPanel').style.display = show ? 'block' : 'none';
+    if (window.matchMedia('(max-width: 760px)').matches) {
+        if (show) {
+            document.body.dataset.mobileView = 'safety';
+            ['mobileChatButton', 'mobileMapButton', 'mobileSafetyButton'].forEach((id, i) => {
+                const button = document.getElementById(id);
+                const active = i === 2;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-current', active ? 'page' : 'false');
+            });
+        } else if (document.body.dataset.mobileView === 'safety') {
+            setMobileView('chat');
+        }
+    }
+    if (show) {
+        const hl = document.getElementById('helplines'); hl.innerHTML = '';
+        HELPLINES.forEach(h => {
+            const row = el('div', 'helpline');
+            row.appendChild(el('span', '', h.name));
+            const a = el('a', '', h.number); a.href = 'tel:' + h.number;
+            row.appendChild(a); hl.appendChild(row);
+        });
+        try { document.getElementById('contactInput').value = localStorage.getItem('trusted_contact') || ''; } catch (e) {}
+        refreshSOS();
+    }
+}
+function getLocation() {
+    const s = document.getElementById('locStatus');
+    if (!navigator.geolocation) { s.textContent = 'Location is not available in this window. Read out your address instead.'; return; }
+    s.textContent = 'Getting location...';
+    navigator.geolocation.getCurrentPosition(p => {
+        lastPos = { lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) };
+        s.textContent = 'Location added to the message.'; refreshSOS();
+    }, () => { s.textContent = 'Could not get location (permission denied or unavailable).'; },
+    { enableHighAccuracy: true, timeout: 10000 });
+}
+async function copySOS() {
+    const ok = await copyText(document.getElementById('sosMsg').value);
+    document.getElementById('locStatus').textContent = ok ? 'Copied. Paste it into any chat.' : 'Copy failed. Select the text and copy manually.';
+}
+function saveContact() {
+    try { localStorage.setItem('trusted_contact', document.getElementById('contactInput').value.trim()); } catch (e) {}
+    refreshSOS();
+    document.getElementById('locStatus').textContent = 'Contact saved on this device.';
+}
+document.getElementById('contactInput').addEventListener('input', refreshSOS);
+/* ---------- fake call ---------- */
+const FAKE_SCRIPT = {
+    hi: ["\u0939\u0947\u0932\u094b \u092c\u0947\u091f\u093e, \u0924\u0942 \u0915\u0939\u093e\u0901 \u0939\u0948? \u092e\u0948\u0902 \u092c\u0938 \u0926\u094b \u092e\u093f\u0928\u091f \u092e\u0947\u0902 \u092a\u0939\u0941\u0901\u091a \u0930\u0939\u093e \u0939\u0942\u0901\u0964",
+         "\u091c\u0939\u093e\u0901 \u0939\u0948 \u0935\u0939\u0940\u0902 \u0930\u0941\u0915, \u0915\u093f\u0938\u0940 \u0915\u0947 \u0938\u093e\u0925 \u0915\u0939\u0940\u0902 \u092e\u0924 \u091c\u093e\u0928\u093e\u0964",
+         "\u0924\u0947\u0930\u0947 \u092d\u0948\u092f\u093e \u092d\u0940 \u092e\u0947\u0930\u0947 \u0938\u093e\u0925 \u0939\u0948\u0902, \u0939\u092e \u0924\u0947\u0930\u0940 \u0932\u094b\u0915\u0947\u0936\u0928 \u092a\u0930 \u0906 \u0930\u0939\u0947 \u0939\u0948\u0902\u0964",
+         "\u092b\u093c\u094b\u0928 \u092e\u0924 \u0915\u093e\u091f\u0928\u093e, \u092e\u0948\u0902 \u0932\u093e\u0907\u0928 \u092a\u0930 \u0939\u0942\u0901\u0964"],
+    en: ["Hello beta, where are you? I'm almost there, just two minutes away.",
+         "Stay right where you are. Don't go anywhere with anyone.",
+         "Your brother is with me, and we are coming to your exact location.",
+         "Don't hang up, I'm on the line."]
+};
+let ringCtx = null, ringTimer = null, fakeDelayTimer = null, callAudio = null, callTick = null, speaking = false;
+
+async function openFake() {
+    document.getElementById('fakePanel').style.display = 'block';
+    const sel = document.getElementById('fakeVoice');
+    sel.innerHTML = '';
+    sel.appendChild(new Option('Built-in deep voice (text-to-speech)', ''));
+    try {
+        const j = await (await fetch('/fake_call_list')).json();
+        j.files.forEach(f => sel.appendChild(new Option('Recording: ' + f, f)));
+        const saved = localStorage.getItem('fake_voice');
+        if (saved && j.files.includes(saved)) sel.value = saved;
+        else if (j.files.length) sel.value = j.files[0];
+        document.getElementById('fakeName').value = localStorage.getItem('fake_name') || 'Papa';
+    } catch (e) {}
+}
+
+function startRing() {
+    if (ringCtx && ringCtx.state === 'suspended') ringCtx.resume().catch(() => {});
+    const burst = () => {
+        if (ringCtx) {
+            try {
+                [0, 0.55].forEach(off => {
+                    [440, 480].forEach(freq => {
+                        const o = ringCtx.createOscillator(), g = ringCtx.createGain(), t = ringCtx.currentTime + off;
+                        o.frequency.value = freq; o.connect(g); g.connect(ringCtx.destination);
+                        g.gain.setValueAtTime(0.0001, t);
+                        g.gain.exponentialRampToValueAtTime(0.2, t + 0.03);
+                        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+                        o.start(t); o.stop(t + 0.45);
+                    });
+                });
+            } catch (e) { ringCtx = null; }
+        }
+        try { if (navigator.vibrate) navigator.vibrate([400, 200, 400]); } catch (e) {}
+    };
+    burst();
+    ringTimer = setInterval(burst, 2400);
+}
+
+function startFake() {
+    const name = (document.getElementById('fakeName').value.trim() || 'Papa').slice(0, 30);
+    const delay = parseInt(document.getElementById('fakeDelay').value, 10) || 0;
+    try {
+        localStorage.setItem('fake_name', name);
+        localStorage.setItem('fake_voice', document.getElementById('fakeVoice').value);
+    } catch (e) {}
+    // Created inside the click so the browser allows sound later
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+            ringCtx = ringCtx || new AudioContextClass();
+            ringCtx.resume().catch(() => {});
+        }
+    } catch (e) {
+        ringCtx = null;   // the incoming call UI must still appear without browser audio support
+    }
+    document.getElementById('fakePanel').style.display = 'none';
+    if (delay > 0) addMsg('ai', 'Fake call from ' + name + ' will ring in ' + delay + ' seconds.');
+    clearTimeout(fakeDelayTimer);
+    fakeDelayTimer = setTimeout(() => showIncoming(name), delay * 1000);
+}
+
+function showIncoming(name) {
+    const s = document.getElementById('callScreen');
+    document.getElementById('callName').textContent = name;
+    document.getElementById('callAvatar').textContent = name.charAt(0).toUpperCase();
+    document.getElementById('callStatus').textContent = 'Incoming call...';
+    document.getElementById('acceptBtn').style.display = '';
+    document.getElementById('callBtns').style.gap = '90px';
+    s.classList.add('ringing');
+    s.style.display = 'flex';
+    startRing();
+}
+
+function acceptFake() {
+    clearInterval(ringTimer); ringTimer = null;
+    if (navigator.vibrate) navigator.vibrate(0);
+    const s = document.getElementById('callScreen');
+    s.classList.remove('ringing');
+    document.getElementById('acceptBtn').style.display = 'none';
+    document.getElementById('callBtns').style.gap = '0';
+    const t0 = Date.now(), status = document.getElementById('callStatus');
+    status.textContent = '00:00';
+    callTick = setInterval(() => {
+        const sec = Math.floor((Date.now() - t0) / 1000);
+        status.textContent = String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
+    }, 1000);
+    playFakeVoice();
+}
+
+async function playFakeVoice() {
+    const file = document.getElementById('fakeVoice').value;
+    if (file) {
+        try {
+            const response = await fetch('/fake_call_audio/' + encodeURIComponent(file));
+            if (!response.ok) throw new Error('Recording unavailable');
+            callAudio = new Audio(URL.createObjectURL(await response.blob()));
+            callAudio.loop = true;
+            callAudio.volume = 1;
+            await callAudio.play();
+        } catch (_) { speakScript(); }
+    } else {
+        speakScript();
+    }
+}
+
+function speakScript() {
+    if (!('speechSynthesis' in window)) return;
+    const lang = document.getElementById('fakeLang').value;
+    const lines = FAKE_SCRIPT[lang];
+    const want = lang === 'hi' ? 'hi' : 'en';
+    const voices = speechSynthesis.getVoices();
+    const male = /male|hemant|ravi|david|mark|prabhat|rishi/i;
+    const voice = voices.find(v => v.lang.toLowerCase().startsWith(want) && male.test(v.name))
+               || voices.find(v => v.lang.toLowerCase().startsWith(want)) || null;
+    speaking = true;
+    let i = 0;
+    const next = () => {
+        if (!speaking) return;
+        const u = new SpeechSynthesisUtterance(lines[i % lines.length]);
+        u.lang = lang === 'hi' ? 'hi-IN' : 'en-IN';
+        if (voice) u.voice = voice;
+        u.pitch = 0.5; u.rate = 0.88; u.volume = 1;      // low pitch = deeper, older-sounding voice
+        u.onend = () => { i++; setTimeout(next, 1500); };
+        u.onerror = () => { speaking = false; };
+        speechSynthesis.speak(u);
+    };
+    next();
+}
+
+function endFake() {
+    clearTimeout(fakeDelayTimer);
+    clearInterval(ringTimer); ringTimer = null;
+    clearInterval(callTick); callTick = null;
+    speaking = false;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (callAudio) { callAudio.pause(); callAudio = null; }
+    if (navigator.vibrate) navigator.vibrate(0);
+    document.getElementById('callScreen').style.display = 'none';
+}
+if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => {};   // loads the voice list early
+initThemes();
+initPlaceDropdowns();
+syncMobileLayout();
+window.addEventListener('resize', syncMobileLayout);
+initMap();
+addMsg('ai', 'Hello! Tell me where you are going and I can compare route options. You can also open Quick route for saved places, or use the Map tab to see your trip.\n\nIf you feel unsafe, open Safety for emergency calls, location sharing, trusted contacts, and a fake call.');
+</script>
+</body>
+</html>

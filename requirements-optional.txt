@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Optional desktop window, shapefile import, and Excel batch-file support.
+pywebview>=5.0,<7.0
+pyshp>=2.3,<3.0
+openpyxl>=3.1,<4.0
