@@ -32,7 +32,7 @@ Optional extras (each is a one-time download):
 Needs an internet connection (for map tiles and routing). The AI runs locally.
 These are free community servers: fine for personal use, please don't hammer them.
 For Api amd Address of local assistant use this command:-
-python .\safety_shield_all_in_one.py --phone-api --browser
+python .\\safety_shield_all_in_one.py --phone-api --browser
 """
 import csv
 import datetime
@@ -400,6 +400,36 @@ CHAT_LOCATION_INTENT = re.compile(
     r"|सबसे\s*(?:नज़दीक|नजदीक|पास)|आसपास|मेरे\s*पास|मेरी\s*(?:लोकेशन|जगह)|मैं\s*कहाँ\s*हूँ|सुरक्षित\s*जगह",
     re.IGNORECASE,
 )
+PRIVACY_INTENT = re.compile(
+    r"\b(?:is my data private|is my location private|do you store my (?:location|data|trip|contacts?)|"
+    r"do you save my (?:location|data|trip|contacts?)|what data (?:do you|does this app) use|"
+    r"do you share my (?:location|data|trip)|where (?:is|are) my (?:data|location|trips?|contacts?) stored|"
+    r"what happens to my location|privacy policy)\b|"
+    r"मेरा डेटा निजी है|मेरी लोकेशन (?:सहेज|स्टोर)|मेरी जानकारी (?:सहेज|स्टोर)|क्या आप मेरी लोकेशन रखते",
+    re.IGNORECASE,
+)
+
+
+def privacy_reply(lang: str) -> str:
+    """Describe app storage and network behavior without promising third-party retention."""
+    answers = {
+        "en": ("Some app data is saved on this device: trusted contacts, saved places, settings, and trip history. "
+               "Nearby and route requests send your location or place names to this app's server; route lookup may also "
+               "use public geocoding or routing services. I can't verify what those external services retain. Avoid "
+               "entering information you don't want processed. Clearing this app's site data removes locally saved items."),
+        "hinglish": ("Kuch app data isi device par save hota hai: trusted contacts, saved places, settings aur trip history. "
+                     "Nearby ya route request mein aapki location ya place names app ke server ko bheje jaate hain; route "
+                     "lookup ke liye public map services bhi use ho sakti hain. Main un services ki data retention verify "
+                     "nahi kar sakta. Jo jaankari process nahi karwana chahte, use share na karein. App ka site data clear "
+                     "karne se device par saved items delete ho jaate hain."),
+        "hi": ("कुछ ऐप डेटा इसी डिवाइस पर सेव होता है: भरोसेमंद संपर्क, सेव की गई जगहें, सेटिंग और यात्रा इतिहास। "
+              "आसपास की जगह या रास्ता खोजने पर आपकी लोकेशन या जगहों के नाम ऐप के सर्वर को भेजे जाते हैं; रास्ते की खोज "
+              "में सार्वजनिक मैप सेवाएँ भी इस्तेमाल हो सकती हैं। उन सेवाओं की डेटा रिटेंशन मैं सत्यापित नहीं कर सकता। "
+              "जो जानकारी प्रोसेस नहीं करवाना चाहते, उसे साझा न करें। ऐप का साइट डेटा हटाने से डिवाइस पर सेव की गई चीज़ें मिट जाती हैं।"),
+    }
+    return answers.get(lang, answers["en"])
+
+
 _CAPABILITY = {
     "checkin": {
         "en": ("I can't set check-ins or timers, and I can't send alerts to your contacts from this chat. Here is what "
@@ -787,18 +817,19 @@ COMMON_DELHI_PLACES = [
 DISTRESS_PATTERN = re.compile(
     r"(?:\bi(?: am|'m|m) being followed\b|\bsome(?:one|body|1)(?: is|'s)? following me\b|"
     r"\bi(?: am|'m|m) being (?:stalked|harassed|assaulted|attacked|molested)\b|"
-    r"\b(?:someone|he|she|they) (?:is|are) (?:stalking|harassing|attacking) me\b|"
-    r"\b(?:someone|he|she|they) (?:assaulted|attacked|molested) me\b|"
+    r"\b(?:someone|a man|he|she|they) (?:is|are) (?:stalking|harassing|attacking) me\b|"
+    r"\b(?:someone|he|she|they) (?:assaulted|attacked|molested) me\b|\bi was attacked\b|"
     r"\b(?:i was grabbed|someone grabbed me|someone grabbed my arm)\b.{0,50}\b(?:hiding|shop|safe)\b|"
     r"\bi(?: am|'m|m) (?:in danger|scared|unsafe)\b|\bi feel unsafe\b|\bi don't feel safe\b|"
     r"\b(?:please help(?: me)? now|i need help now|help me now)\b|"
-    r"^\s*(?:sos|help(?: me)?|bachao)\W*$|"
-    r"\b(?:this is an emergency|emergency help now|i need emergency help)\b|"
+    r"^\s*(?:sos|help(?: me)?(?: please)?|please help(?: me)?|i need help(?: me)?(?: please)?|"
+    r"madad karo|meri madad karo|madad chahiye|mujhe bachao|khatre mein hoon|bachao)\W*$|"
+    r"\b(?:this is an emergency|there is an emergency|emergency help now|i need emergency help)\b|"
     r"\balguien me est[aá] siguiendo\b.{0,50}\b(?:miedo|asustad[oa])\b|"
     r"\bquelqu['’]un me suit\b.{0,50}\b(?:peur|effray[ée])\b|"
     r"\b(?:ek ajnabi|koi)\b.{0,35}\b(?:meri|hamari) gaadi ke peeche aa raha\b|"
     # Only explicit first-person or immediate danger language triggers the emergency panel.
-    r"\b(?:koi mera peecha kar raha hai|mera peecha kiya ja raha hai|mujhe khatra hai|"
+    r"\b(?:koi (?:mera )?peecha kar raha hai|mera peecha kiya ja raha hai|mujhe khatra hai|"
     r"main khatre (?:mein|me) hoon|mujhe dar lag raha|mere saath chhed ?chhad ho rahi)\b|"
     r"\u092e\u0941\u091d\u0947 \u0916\u0924\u0930\u093e \u0939\u0948|"
     r"\u092e\u0948\u0902 \u0916\u0924\u0930\u0947 \u092e\u0947\u0902 \u0939\u0942\u0901|"
@@ -902,7 +933,7 @@ TOPIC_RULES = [
      "For workplace sexual harassment in India, the POSH Act provides for an Internal Committee (often called the Internal Complaints Committee or ICC) at covered workplaces. Keep dated records of incidents and messages, and consider contacting 181 or a trusted adviser. Seek current local guidance about the process."),
     (re.compile(r"\bboyfriend\b.{0,50}\b(?:dangerous|abusive)\b|\b(?:dangerous|abusive)\b.{0,40}\bboyfriend\b", re.I),
      "I can't judge your boyfriend from outside. Warning signs can include threats, intimidation, monitoring, isolation, or controlling your choices. For support, contact 181 or someone you trust; call 112 if danger is immediate."),
-    (re.compile(r"\b(?:assaulted|sexual assault|was raped|i was raped|molested)\b", re.I),
+    (re.compile(r"\b(?:attacked|assaulted|sexual assault|was raped|i was raped|molested)\b", re.I),
      "I'm sorry this happened. You deserve support, and it wasn't your fault. You can choose whether to seek medical care, talk with someone you trust, or consider reporting; there is no pressure to report. 181 can help you find support."),
     (re.compile(r"\bshould i report\b.{0,60}\b(?:police|scared|believe me|believe us)\b|\bscared (?:that )?(?:nobody|no one) will believe me\b", re.I),
      "It is understandable to worry about being believed. There is no pressure to report; you can decide what feels right. If safe, keep any messages or notes about what happened, and consider talking with someone you trust or Women Helpline 181 to explore your options."),
@@ -1814,8 +1845,9 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
 
     currentRoutes = data.routes;
     saveTripHistory(data, origin, destination, mode);
-    const resolvedSummary = 'Resolved places: ' + data.resolved.origin + (data.resolved.via ? ' via ' + data.resolved.via : '')
-        + ' → ' + data.resolved.destination + '.\n';
+    const resolved = data.resolved || {};
+    const resolvedSummary = 'Resolved places: ' + (resolved.origin || origin) + (resolved.via ? ' via ' + resolved.via : '')
+        + ' → ' + (resolved.destination || destination) + '.\n';
     lastTrip = { a: data.start, b: data.end, via: data.via_location || null, mode };
     drawRoutes(data);
     setMobileView('map');
@@ -2204,7 +2236,7 @@ async function sendChatMessage() {
     let location = null;
     try {
         if (needsLocationForChat(text)) {
-            thinking.textContent = 'Requesting your location for this nearby question. It is used for this request only...';
+            thinking.textContent = 'Your coordinates will be sent to this app to look up nearby mapped places...';
             try {
                 const position = await requestChatLocation();
                 location = { lat: position.coords.latitude, lon: position.coords.longitude };
@@ -3925,7 +3957,7 @@ async function sendChatMessage() {
     let location = null;
     try {
         if (needsLocationForChat(text)) {
-            thinking.textContent = 'Requesting your location for this nearby question. It is used for this request only...';
+            thinking.textContent = 'Your coordinates will be sent to this app to look up nearby mapped places...';
             try {
                 const position = await requestChatLocation();
                 location = { lat: position.coords.latitude, lon: position.coords.longitude };
@@ -4421,6 +4453,8 @@ SPELLING_GROUPS = [
     ("bhawan", "bhavan"), ("chowk", "chauk", "chouk"), ("gurudwara", "gurdwara", "gurudwar"),
     ("uprashtrapati", "upa rashtrapati"), ("kanjhawla", "kanjhawala", "kanjhavla", "kanjhwala"),
     ("mandir", "mandar"), ("vihar", "bihar"), ("shahdara", "shahadra"), ("lajpat", "lajpath"),
+    ("nangloi", "nagloi"), ("rohini", "rohni"), ("rajiv", "rajeev"),
+    ("connaught", "conaught"), ("place", "plce"),
 ]
 
 
@@ -4534,6 +4568,28 @@ def _strip_station_words(place: str) -> str:
     return re.sub(r"\s+", " ", _STATION_WORDS.sub(" ", head)).strip()
 
 
+def _offline_area_lookup(place: str) -> dict | None:
+    """Use a name-matched saved Metro station as a generic Delhi fallback."""
+    locality = place.split(",", 1)[0].strip()
+    wanted = re.sub(r"\b(?:metro|station|delhi|india)\b", " ", locality.casefold())
+    wanted = re.sub(r"\s+", " ", wanted).strip()
+    if not wanted:
+        return None
+    stations = _cached_metro_stations()
+    exact = [s for s in stations if _clean_name(s.get("name", "")).casefold() == wanted]
+    matches = exact or [s for s in stations
+                        if wanted in _clean_name(s.get("name", "")).casefold()
+                        or _clean_name(s.get("name", "")).casefold() in wanted]
+    if not matches:
+        return None
+    pick = min(matches, key=lambda s: abs(len(_clean_name(s.get("name", ""))) - len(wanted)))
+    lat, lon = float(pick["lat"]), float(pick["lon"])
+    if not guards.in_delhi(lat, lon):
+        return None
+    return {"lat": lat, "lon": lon,
+            "display_name": f"{locality} (approximate; matched saved station: {pick['name']})",
+            "in_area": True, "approximate": True}
+
 def metro_station_lookup(place: str):
     """If the person typed a metro station ('... metro station'), find it in our own station list.
     Instant, works offline, and avoids the place-search service not knowing 'Metro Station' wording."""
@@ -4560,7 +4616,14 @@ def geocode(place: str) -> dict:
     key = place.strip().lower()
     with _geo_lock:
         if key in _geo_cache:
-            return _require_area(_geo_cache[key], place)
+            cached = _geo_cache[key]
+            if cached.get("in_area"):
+                return cached
+            fallback = _offline_area_lookup(place)
+            if fallback:
+                _geo_cache[key] = fallback
+                return fallback
+            return _require_area(cached, place)
         local = metro_station_lookup(place)
         if local:
             local["in_area"] = _in_area({}, local["lat"], local["lon"])
@@ -4569,21 +4632,40 @@ def geocode(place: str) -> dict:
         queries = spelling_variants(place)
         named_region = bool("," in place or other_city_in(place) or NCR_TOWN_PATTERN.search(place) or
                             re.search(r"\b(?:Delhi|Agra|Noida|Gurugram|Gurgaon|Ghaziabad|Faridabad|Mumbai|Bengaluru|Bangalore|Kolkata|Chennai|Pune|Hyderabad|Jaipur|Lucknow|Chandigarh)\b", place, re.I))
-        # Resolve exactly what the user typed first. Delhi is only a fallback for a
-        # regionless name; never bias a named city/region toward Delhi.
-        if not named_region:
+        # For Delhi place names, retry shorter forms because some geocoders reject
+        # the dropdown's full "Place, Delhi, India" query.
+        if re.search(r"\bDelhi\b", place, re.I):
+            head = place.split(",", 1)[0].strip()
+            queries.extend([head + ", Delhi", head])
+        elif not named_region:
             queries += [q + ", " + DEFAULT_CITY for q in list(queries)]
         stripped = _strip_station_words(place)
         if stripped and stripped.lower() != place.split(",")[0].strip().lower() and not named_region:
             queries.append(stripped + ", " + DEFAULT_CITY)
+        outside_result = False
         for query in queries:
-            data = _nominatim(query)
+            try:
+                data = _nominatim(query)
+            except requests.RequestException:
+                fallback = _offline_area_lookup(place)
+                if fallback:
+                    _geo_cache[key] = fallback
+                    return fallback
+                raise
             if data:
                 lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
                 result = {"lat": lat, "lon": lon, "display_name": data[0].get("display_name"),
                         "in_area": _in_area(data[0].get("address"), lat, lon)}
-                _geo_cache[key] = result
-                return _require_area(result, place)
+                if result["in_area"]:
+                    _geo_cache[key] = result
+                    return result
+                outside_result = True
+        fallback = _offline_area_lookup(place)
+        if fallback:
+            _geo_cache[key] = fallback
+            return fallback
+        if outside_result:
+            raise OutsideArea(place)
         raise PlaceNotFound(place)
 
 
@@ -6607,7 +6689,11 @@ _TIME_TAIL = re.compile(
     r"\s+(?:safely|safe)\b.*$|"
     r"\s+(?:by|via|using)\s+(?:the\s+)?(?:metro|subway|bus)\b.*$|"
     r"\s+(?:which|what)\s+(?:is\s+)?(?:the\s+)?(?:safest|best)\s+(?:coach|carriage|compartment)\b.*$", re.IGNORECASE)
-PLACEHOLDER = re.compile(r"^(?:the station|station|my hostel|hostel|home|my home|ghar|my house|any slum or colony area|slum|colony|there|here|somewhere|extend it|shouldn'?t i go|mera pati mujhe ghar)$", re.I)
+PLACEHOLDER = re.compile(
+    r"^(?:the station|station|my hostel|hostel|home|my home|ghar|my house|any slum or colony area|slum|colony|"
+    r"there|here|somewhere|extend it|shouldn'?t i go|mera pati mujhe ghar|"
+    r"a|b|x|y|xyz|nowhereville)$", re.I)
+PLANETARY_BODY = re.compile(r"^(?:mercury|venus|earth|mars|jupiter|saturn|uranus|neptune|pluto)$", re.I)
 
 
 def regex_route_fallback(message: str):
@@ -6625,7 +6711,9 @@ def regex_route_fallback(message: str):
     if not m:
         return None, None
     origin, dest = m.group(1).strip(" ,.?"), m.group(2).strip(" ,.?")
-    origin = re.sub(r"^(hi|hello|hey|please|pls|bhai|go|travel|route|take me|i want to go|i need to go)\s+", "", origin, flags=re.I)
+    origin = re.sub(
+        r"^(hi|hello|hey|please|pls|bhai|go|travel|route|take me|i want to go|i need to go)[\s,:;!\-]+",
+        "", origin, flags=re.I)
     origin = re.sub(r"^from\s+", "", origin, flags=re.I)
     dest = re.sub(r"\s+(please|pls|plz)$", "", _TIME_TAIL.sub("", dest), flags=re.I).strip(" ,.?")
     origin = re.sub(r"\bCP\b", "Connaught Place", origin, flags=re.I)
@@ -6642,7 +6730,7 @@ def regex_route_fallback(message: str):
 def route_followup_from_history(message: str, history):
     """Recover a recent user-stated trip for short route follow-ups without guessing places."""
     followup = re.search(
-        r"\b(?:same route|that route|this route|at\s+\d|by metro|by bus|longer route|"
+        r"\b(?:same route|same trip|that route|this route|at\s+\d|by metro|by bus|using (?:the )?bus|longer route|"
         r"more shops|most police|safest coach|which coach|what about the route)\b", message, re.I)
     if not followup:
         return None, None
@@ -6971,6 +7059,8 @@ def chat_query():
         return jsonify(guards.pin_required_reply(lang))
     if guards.SETTINGS_INTENT.search(message):
         return jsonify(guards.settings_refusal(lang))
+    if PRIVACY_INTENT.search(message):
+        return jsonify({"has_route": False, "source": "privacy", "ai_response": privacy_reply(lang)})
     location_query = bool(CHAT_LOCATION_INTENT.search(message))
     capability = None if location_query else guards.capability_reply(message, lang)
     if capability:
@@ -7161,6 +7251,9 @@ def chat_query():
     if has_route and (PLACEHOLDER.fullmatch(origin.strip()) or PLACEHOLDER.fullmatch(destination.strip())):
         return jsonify({"has_route": False, "source": "rule",
                         "ai_response": "Please give real place names for both the start and destination; I can't route to a generic place like home or 'the station'."})
+    if has_route and PLANETARY_BODY.fullmatch(origin.strip()) and PLANETARY_BODY.fullmatch(destination.strip()):
+        return jsonify({"has_route": False, "source": "rule",
+                        "ai_response": "Those look like planetary names rather than Delhi places. Please give specific start and destination places."})
     if has_route and THIRD_PARTY_PLACE.search(origin) and THIRD_PARTY_PLACE.search(destination):
         app.logger.warning("Refused a request (other_person)")
         return jsonify(refusal_reply("other_person", lang))
@@ -7329,14 +7422,21 @@ def find_safer_detours(a: dict, b: dict, mode: str, routes: list, max_extra: int
 @app.route("/plan_route", methods=["POST"])
 def plan_route():
     p = request.get_json(silent=True) or {}
-    origin = str(p.get("origin", "")).strip()[:200]
-    destination = str(p.get("destination", "")).strip()[:200]
-    via_name = str(p.get("via", "")).strip()[:200]
+    origin = str(p.get("origin") or "").strip()[:200]
+    destination = str(p.get("destination") or "").strip()[:200]
+    via_name = str(p.get("via") or "").strip()[:200]
     mode = p.get("mode") if p.get("mode") in ("WALKING", "TRANSIT", "BUS") else "DRIVING"
     requested_time = p.get("departure_time") or p.get("time")
     _SCORING_CONTEXT.hour = parse_departure_hour(requested_time)
     if not origin or not destination:
         return jsonify({"error": "Please give both a start and a destination."}), 400
+    if origin.casefold() in {"none", "null", "undefined"} or destination.casefold() in {"none", "null", "undefined"}:
+        app.logger.error("Route request contained an empty endpoint sentinel: origin=%r destination=%r", origin, destination)
+        return jsonify({"error": "The app sent an empty start or destination. Re-select both places and try again."}), 400
+    if PLACEHOLDER.fullmatch(origin) or PLACEHOLDER.fullmatch(destination):
+        return jsonify({"error": "Please enter specific place names for both the start and destination. Generic or placeholder names cannot be routed."}), 400
+    if PLANETARY_BODY.fullmatch(origin) and PLANETARY_BODY.fullmatch(destination):
+        return jsonify({"error": "Those look like planetary names rather than Delhi places. Please enter specific start and destination places."}), 400
 
     try:
         origin_coords = p.get("origin_coords")
@@ -7384,6 +7484,8 @@ def plan_route():
     if not guards.in_delhi(b["lat"], b["lon"]):
         return jsonify({"error": guards.outside_delhi_message(destination), "outside_area": True,
                         "open_sos": True}), 422
+    if haversine(a["lat"], a["lon"], b["lat"], b["lon"]) < 25:
+        return jsonify({"error": "The start and destination resolve to the same place. Please choose two different places."}), 400
     if c and not guards.in_delhi(c["lat"], c["lon"]):
         return jsonify({"error": guards.outside_delhi_message(via_name), "outside_area": True,
                         "open_sos": True}), 422
