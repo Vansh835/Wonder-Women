@@ -4,12 +4,24 @@ Women Safety Shield is a single-file Flask application with desktop and phone-fi
 
 ## What it can do
 
-- Plan available walking, driving, metro, and bus routes from cached or public map and routing data.
-- Show mapped points of interest and explain the limits of route scores.
-- Provide SOS options, trusted-contact tools, and a PIN-protected emergency-state reset.
-- Run the chat model locally through Ollama; no hosted AI API key is required.
+- Compare walking, driving, Delhi Metro, and bus route options using public or cached map data.
+- Colour sampled route stretches green when mapped places were nearby and red when the sample had no mapped place. These are map-data signals, not live observations of crowds.
+- Show each route's score, travel time, nearby mapped police and hospital points, and the nearest tagged 24-hour place when that information exists. Help points are marked on the map with approximate distance from a checked route point.
+- Compare a route's current score with a midday estimate. After local sunset, the app uses a date-specific offline sunset/sunrise calculation for night weighting; map opening-hour data may still be incomplete.
+- Suggest a nearby cab pickup point by ranking mapped places for nearby activity and distance, then offer a route to it.
+- Prepare an SMS to a saved trusted contact with cab driver and vehicle details plus a map link. The user reviews it and taps Open SMS to send; the app does not send messages itself.
+- Find nearby mapped places and offer a route from the user's shared current location to each result.
+- Dictate a chat message with the microphone button in supported browsers; the transcript appears in the input field for review before sending.
+- Provide SOS and emergency numbers, location-sharing tools, a PIN-protected emergency-state reset, and a fake-call feature.
+- Answer women's-safety questions with a local Ollama model; no hosted AI API key is required.
 
 Route scores describe the available map data. They are not crime statistics, live surveillance, or a guarantee of safety. Emergency services remain the source of help in immediate danger.
+
+## Route map and safety tools
+
+The route heat colours show whether the route's sampled map points had mapped amenities nearby. A red segment means no matching place was found around that sample; it does not prove that the street is empty or unsafe. Green means mapped places were found, not that anyone is present now. Help-point distances are approximate, and a 24-hour venue is listed only when its OpenStreetMap record is tagged with 24-hour opening hours.
+
+The daytime comparison recalculates mapped-place weighting for midday and is intended as a rough planning aid. The cab message and pickup suggestion are optional: check details and surroundings yourself, and send any SMS from your device.
 
 ## Requirements
 

@@ -2,22 +2,32 @@ package com.womensafety.phoneapp;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlarmManager;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.text.InputType;
 import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.GeolocationPermissions;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -30,6 +40,7 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.net.URI;
+import java.util.ArrayList;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "phone_api_settings";
@@ -38,12 +49,15 @@ public final class MainActivity extends Activity {
     private static final String ASSET_ORIGIN = "https://appassets.androidplatform.net";
     private static final String START_PAGE = ASSET_ORIGIN + "/assets/www/index.html";
     private static final int LOCATION_PERMISSION_REQUEST = 7201;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 7202;
+    private static final int AUDIO_PERMISSION_REQUEST = 7203;
 
     private SharedPreferences preferences;
     private WebView webView;
     private TextView connectionStatus;
     private GeolocationPermissions.Callback pendingLocationCallback;
     private String pendingLocationOrigin;
+    private SpeechRecognizer speechRecognizer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -129,6 +143,8 @@ public final class MainActivity extends Activity {
             }
         });
 
+        webView.addJavascriptInterface(new CheckInBridge(), "SafetyNative");
+
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onGeolocationPermissionsShowPrompt(
@@ -155,6 +171,108 @@ public final class MainActivity extends Activity {
         });
 
         webView.loadUrl(START_PAGE);
+    }
+
+    private void ensureCheckInChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) manager.createNotificationChannel(new NotificationChannel(
+                CheckInReceiver.CHANNEL_ID, "Check-in reminders", NotificationManager.IMPORTANCE_HIGH));
+    }
+
+    private final class CheckInBridge {
+        @JavascriptInterface
+        public String startVoiceRecognition(String language) {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION_REQUEST));
+                return "permission_required";
+            }
+            if (!SpeechRecognizer.isRecognitionAvailable(MainActivity.this)) return "unavailable";
+            runOnUiThread(() -> beginNativeSpeech(language));
+            return "started";
+        }
+
+        @JavascriptInterface
+        public void stopVoiceRecognition() {
+            runOnUiThread(() -> {
+                if (speechRecognizer != null) {
+                    try { speechRecognizer.cancel(); speechRecognizer.destroy(); } catch (Exception ignored) { }
+                    speechRecognizer = null;
+                }
+                if (webView != null) webView.evaluateJavascript("window.onNativeSpeechStopped && window.onNativeSpeechStopped()", null);
+            });
+        }
+
+        @JavascriptInterface
+        public String scheduleCheckIn(String idText, long whenMillis, String phone, String message) {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                        NOTIFICATION_PERMISSION_REQUEST));
+                return "permission_required";
+            }
+            try {
+                ensureCheckInChannel();
+                int id = Math.abs(idText == null ? 1 : idText.hashCode());
+                Intent alarmIntent = new Intent(MainActivity.this, CheckInReceiver.class)
+                        .putExtra("id", id)
+                        .putExtra(CheckInReceiver.EXTRA_PHONE, phone)
+                        .putExtra(CheckInReceiver.EXTRA_MESSAGE, message);
+                PendingIntent pending = PendingIntent.getBroadcast(MainActivity.this, id, alarmIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                AlarmManager alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+                if (alarms == null) return "unavailable";
+                alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, whenMillis, pending);
+                return "scheduled";
+            } catch (Exception ignored) { return "unavailable"; }
+        }
+
+        @JavascriptInterface
+        public void cancelCheckIn(String idText) {
+            try {
+                int id = Math.abs(idText == null ? 1 : idText.hashCode());
+                Intent intent = new Intent(MainActivity.this, CheckInReceiver.class);
+                PendingIntent pending = PendingIntent.getBroadcast(MainActivity.this, id, intent,
+                        PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
+                if (pending != null) {
+                    AlarmManager alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+                    if (alarms != null) alarms.cancel(pending);
+                    pending.cancel();
+                }
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private void beginNativeSpeech(String language) {
+        if (speechRecognizer != null) {
+            try { speechRecognizer.destroy(); } catch (Exception ignored) { }
+        }
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        speechRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override public void onReadyForSpeech(Bundle params) { }
+            @Override public void onBeginningOfSpeech() { }
+            @Override public void onRmsChanged(float rmsdB) { }
+            @Override public void onBufferReceived(byte[] buffer) { }
+            @Override public void onEndOfSpeech() { }
+            @Override public void onError(int error) {
+                if (webView != null) webView.evaluateJavascript("window.onNativeSpeechError && window.onNativeSpeechError(" + error + ")", null);
+                if (speechRecognizer != null) { speechRecognizer.destroy(); speechRecognizer = null; }
+            }
+            @Override public void onResults(Bundle results) {
+                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (matches != null && !matches.isEmpty() && webView != null) {
+                    webView.evaluateJavascript("window.onNativeSpeechResult && window.onNativeSpeechResult(" + JSONObject.quote(matches.get(0)) + ")", null);
+                }
+                if (speechRecognizer != null) { speechRecognizer.destroy(); speechRecognizer = null; }
+            }
+            @Override public void onPartialResults(Bundle partialResults) { }
+            @Override public void onEvent(int eventType, Bundle params) { }
+        });
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language == null ? "hi-IN" : language);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+        speechRecognizer.startListening(intent);
     }
 
     private boolean handleNavigation(Uri uri) {
@@ -306,6 +424,10 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (speechRecognizer != null) {
+            try { speechRecognizer.cancel(); speechRecognizer.destroy(); } catch (Exception ignored) { }
+            speechRecognizer = null;
+        }
         if (webView != null) {
             webView.stopLoading();
             webView.destroy();
