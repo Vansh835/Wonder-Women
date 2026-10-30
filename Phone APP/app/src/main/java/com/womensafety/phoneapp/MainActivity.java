@@ -61,6 +61,7 @@ public final class MainActivity extends Activity implements SensorEventListener 
     private TextView connectionStatus;
     private GeolocationPermissions.Callback pendingLocationCallback;
     private String pendingLocationOrigin;
+    private String pendingSpeechLanguage;
     private SpeechRecognizer speechRecognizer;
     private SensorManager sensorManager;
     private Sensor accelerometer;
@@ -210,6 +211,7 @@ public final class MainActivity extends Activity implements SensorEventListener 
         @JavascriptInterface
         public String startVoiceRecognition(String language) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                pendingSpeechLanguage = language;
                 runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION_REQUEST));
                 return "permission_required";
             }
@@ -220,6 +222,7 @@ public final class MainActivity extends Activity implements SensorEventListener 
 
         @JavascriptInterface
         public void stopVoiceRecognition() {
+            pendingSpeechLanguage = null;
             runOnUiThread(() -> {
                 if (speechRecognizer != null) {
                     try { speechRecognizer.cancel(); speechRecognizer.destroy(); } catch (Exception ignored) { }
@@ -472,6 +475,16 @@ public final class MainActivity extends Activity implements SensorEventListener 
             pendingLocationCallback.invoke(pendingLocationOrigin, granted, false);
             pendingLocationCallback = null;
             pendingLocationOrigin = null;
+        }
+        if (requestCode == AUDIO_PERMISSION_REQUEST) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            String language = pendingSpeechLanguage;
+            pendingSpeechLanguage = null;
+            if (language != null && granted && SpeechRecognizer.isRecognitionAvailable(this)) {
+                beginNativeSpeech(language);
+            } else if (language != null && webView != null) {
+                webView.evaluateJavascript("window.onNativeSpeechError && window.onNativeSpeechError('microphone permission was denied or speech recognition is unavailable')", null);
+            }
         }
     }
 

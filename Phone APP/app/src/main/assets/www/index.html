@@ -933,11 +933,12 @@ function startVoiceInput() {
         if (window.SafetyNative && window.SafetyNative.startVoiceRecognition) {
             let lang = 'hi-IN'; try { lang = localStorage.getItem('voice_language') === 'en' ? 'en-IN' : 'hi-IN'; } catch (e) {}
             const result = window.SafetyNative.startVoiceRecognition(lang);
-            if (result === 'started') {
+            if (result === 'started' || result === 'permission_required') {
                 nativeVoiceActive = true; button.textContent = '■ Stop'; button.title = 'Stop voice input';
-                button.setAttribute('aria-label', 'Stop voice input'); button.classList.add('listening'); button.setAttribute('aria-pressed', 'true'); return;
+                button.setAttribute('aria-label', 'Stop voice input'); button.classList.add('listening'); button.setAttribute('aria-pressed', 'true');
+                if (result === 'permission_required') addMsg('ai', 'Allow microphone access; voice input will start automatically.');
+                return;
             }
-            if (result === 'permission_required') { addMsg('ai', 'Allow microphone access, then tap the microphone again.'); return; }
         }
         addMsg('ai', 'Voice input is not available in this app window. Use your keyboard microphone to dictate, or open the app in a browser that supports speech recognition.');
         return;
