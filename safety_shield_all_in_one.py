@@ -1160,6 +1160,8 @@ HTML_TEMPLATE = r"""
     button:hover { background: var(--accent-hover); }
     .timer { color: #888; font-size: 11px; text-align: right; margin-top: 5px; min-height: 14px; }
 
+    @keyframes safety-alarm-flash { from { background: rgba(220,38,38,0.08); } to { background: rgba(220,38,38,0.62); } }
+    body.safety-alarm-flash::after { content: ""; position: fixed; inset: 0; z-index: 99999; pointer-events: none; background: rgba(220,38,38,.55); mix-blend-mode: screen; }
     #sosPanel { display: none; position: absolute; inset: 0; background: #2a2a35; border-radius: 16px; padding: 20px; z-index: 10; overflow-y: auto; }
     #sosPanel h3 { margin: 0 0 10px; color: #ff1744; }
     #sosPanel .safety-card { margin: 14px 0; padding: 14px; border: 1px solid #454553; border-radius: 14px; background: #22222d; box-shadow: 0 4px 14px #0002; }
@@ -1295,7 +1297,10 @@ HTML_TEMPLATE = r"""
             <select id="pointB" title="Destination point (B)"></select>
             <button class="go-btn" onclick="planFromDropdowns()">Find Route</button>
         </div>
+        <input id="pointVia" type="text" placeholder="Optional stop C (via)" aria-label="Optional stop to pass through">
+        <button type="button" onclick="compareTravelModes()">Compare driving, walking &amp; Metro</button>
         <button class="location-route-btn" type="button" onclick="planFromCurrentLocation()">&#x1F4CD; Route from my current location</button>
+        <div class="quick-route-row"><input id="helpPlace" type="text" placeholder="Nearest police / hospital near…" aria-label="Place to search for nearest police station or hospital"><button type="button" onclick="findNearestHelp()">Find nearest help</button></div>
     </div>
 
     <div class="chat-box" id="chatBox"></div>
@@ -1320,6 +1325,7 @@ HTML_TEMPLATE = r"""
         <h3>&#x1F198; Emergency</h3>
         <p class="small">If you are in immediate danger, call 112 now. On a desktop, use your phone to dial. These numbers are for India.</p>
         <div id="helplines"></div>
+        <div class="row"><button type="button" class="sos-btn" onclick="toggleLoudAlarm()">&#x1F6A8; Sound loud alarm</button></div>
         <h4>Emergency controls</h4>
         <div class="row">
             <button onclick="setSafetyPin()">Set or change PIN</button>
@@ -1337,6 +1343,14 @@ HTML_TEMPLATE = r"""
         <textarea id="sosMsg" readonly>I need help. Please call me or contact the police.</textarea>
         <div id="locStatus" class="small"></div>
 
+        <div class="safety-card"><h4>Recent trips (stored on this device)</h4><button type="button" onclick="renderTripHistory()">Show trip history</button><div id="tripHistoryDisplay" class="small"></div></div>
+        <div class="safety-card"><h4>Emergency card (stored on this device)</h4>
+        <input id="emergencyName" type="text" placeholder="Name">
+        <input id="emergencyBlood" type="text" placeholder="Blood group (optional)">
+        <input id="emergencyAllergies" type="text" placeholder="Allergies / medical notes">
+        <input id="emergencyContacts" type="text" placeholder="Two emergency contacts">
+        <button type="button" onclick="saveEmergencyCard()">Save emergency card</button>
+        <div id="emergencyCardDisplay" class="small" aria-live="polite"></div></div>
         <h4>Trusted contact</h4>
         <input id="contactInput" type="text" placeholder="Phone number, e.g. +919876543210">
         <textarea id="additionalContacts" placeholder="More trusted numbers, one per line"></textarea>
@@ -1349,6 +1363,7 @@ HTML_TEMPLATE = r"""
         <select id="checkInContact" aria-label="Contact for check-in reminder"></select>
         <div class="row"><input id="checkInMinutes" type="number" min="1" max="720" value="40" aria-label="Minutes until check-in"><button onclick="startCheckIn()">Start timer</button><button onclick="confirmCheckIn()">I'm home</button></div>
         <div id="checkInStatus" class="small">Choose how many minutes until you expect to be home.</div>
+        <label class="small" for="batteryAlertThreshold">Low battery alert at (%)</label><input id="batteryAlertThreshold" type="number" min="5" max="50" value="15">
         <div class="safety-card"><h4>Saved places (stored on this device)</h4>
         <input id="homePlace" type="text" placeholder="Home place name">
         <input id="workPlace" type="text" placeholder="Work place name">
@@ -1362,8 +1377,10 @@ HTML_TEMPLATE = r"""
         </div>
         <div class="safety-card">
         <h4>Check score against your audit points</h4>
-        <p class="small">Paste latitude, longitude, and your own label (busy or empty), one point per line.</p>
+        <p class="small">Paste latitude, longitude, and label, one point per line. Map capture and CSV preserve busy, safe, dark, and empty labels; score comparison uses busy/empty rows.</p>
         <textarea id="auditPoints" placeholder="28.6139,77.2090,busy"></textarea>
+        <input type="file" id="auditCsv" accept=".csv,text/csv" onchange="loadAuditCsv(this.files[0])" aria-label="Import audit points CSV">
+        <div class="row"><select id="auditLabel"><option value="busy">Busy</option><option value="safe">Safe</option><option value="dark">Dark</option><option value="empty">Empty</option></select><button type="button" onclick="toggleAuditMapCapture()">Add audit point from map</button><button type="button" onclick="downloadAuditCsv()">Download audit CSV</button></div>
         <button onclick="compareAuditPoints()">Compare audit points</button>
         <div id="auditResult" class="small"></div>
         </div>
@@ -1440,9 +1457,10 @@ const SESSION_ID = (() => { try { let v = sessionStorage.getItem('ss_session_id'
 ];
 
 let map = null;
+let auditMapCapture = false;
 let routeLines = [], mapMarkers = [], placeMarkers = [], lastDetail = -1, chatHistory = [], routeActivityLegend = null;
 let speechRecognition = null, checkInTimerHandle = null, nativeVoiceActive = false;
-let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null;
+let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null, selectedRouteIndex = 0;
 
 /* ---------- small helpers (all text via textContent => no XSS) ---------- */
 function el(tag, cls, text) {
@@ -1479,6 +1497,82 @@ function setTheme(themeId) {
     try { localStorage.setItem('app_theme', t.id); } catch (e) {}
 }
 
+let alarmAudioContext = null, alarmOscillator = null, alarmInterval = null;
+function toggleLoudAlarm() {
+    if (alarmInterval) {
+        clearInterval(alarmInterval); alarmInterval = null;
+        try { alarmOscillator.stop(); } catch (_) {}
+        alarmOscillator = null;
+        document.body.classList.remove('safety-alarm-flash');
+        const button = document.querySelector('#sosPanel .sos-btn');
+        if (button) button.textContent = '🚨 Sound loud alarm';
+        if (navigator.vibrate) navigator.vibrate(0);
+        return;
+    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) { addMsg('ai', 'This browser does not support the alarm sound.'); return; }
+    try {
+        alarmAudioContext = alarmAudioContext || new AudioContextClass();
+        alarmAudioContext.resume();
+        alarmOscillator = alarmAudioContext.createOscillator();
+        const gain = alarmAudioContext.createGain();
+        alarmOscillator.type = 'square'; gain.gain.value = 0.18;
+        alarmOscillator.connect(gain); gain.connect(alarmAudioContext.destination);
+        alarmOscillator.frequency.value = 880; alarmOscillator.start();
+        let high = false;
+        alarmInterval = setInterval(() => {
+            high = !high; alarmOscillator.frequency.setValueAtTime(high ? 1100 : 700, alarmAudioContext.currentTime);
+            document.body.classList.toggle('safety-alarm-flash', high);
+            if (navigator.vibrate) navigator.vibrate(high ? [250, 100, 250] : 0);
+        }, 350);
+        const button = document.querySelector('#sosPanel .sos-btn');
+        if (button) button.textContent = 'Stop loud alarm';
+    } catch (_) { addMsg('ai', 'Could not start the alarm sound. Check device volume and browser audio permission.'); }
+}
+function saveTripHistory(data, origin, destination, mode) {
+    try {
+        const history = JSON.parse(localStorage.getItem('trip_history') || '[]');
+        const route = data.routes[data.best];
+        history.unshift({ origin, destination, mode, score: route.score, minutes: Math.round(route.secs / 60), at: Date.now() });
+        localStorage.setItem('trip_history', JSON.stringify(history.slice(0, 20)));
+    } catch (_) {}
+}
+function renderTripHistory() {
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem('trip_history') || '[]'); } catch (_) {}
+    const display = document.getElementById('tripHistoryDisplay'); if (!display) return;
+    if (!history.length) { display.textContent = 'No trips saved yet.'; return; }
+    const latest = history[0];
+    const comparable = history.filter(item => item.mode === latest.mode && typeof item.score === 'number');
+    const prior = comparable.slice(1);
+    const nudge = prior.length && typeof latest.score === 'number' && latest.score < prior.reduce((sum, item) => sum + item.score, 0) / prior.length - 5
+        ? ' This score is lower than your recent average for this mode.' : '';
+    display.textContent = history.slice(0, 10).map(item => item.origin + ' → ' + item.destination + ' · '
+        + (item.score === null ? 'score unavailable' : item.score + '/100') + ' · ' + item.minutes + ' min · '
+        + new Date(item.at).toLocaleDateString()).join('\n') + nudge;
+}
+function renderEmergencyCard() {
+    let card = {};
+    try { card = JSON.parse(localStorage.getItem('emergency_card') || '{}'); } catch (_) {}
+    ['Name', 'Blood', 'Allergies', 'Contacts'].forEach((key, index) => {
+        const id = ['emergencyName', 'emergencyBlood', 'emergencyAllergies', 'emergencyContacts'][index];
+        const input = document.getElementById(id); if (input) input.value = card[key.toLowerCase()] || '';
+    });
+    const display = document.getElementById('emergencyCardDisplay');
+    if (display) display.textContent = card.name ? 'Emergency card: ' + card.name + (card.blood ? ' · Blood group ' + card.blood : '')
+        + (card.allergies ? ' · Allergies / notes: ' + card.allergies : '') + (card.contacts ? ' · Contacts: ' + card.contacts : '') : 'No emergency card saved.';
+    const batteryInput = document.getElementById('batteryAlertThreshold');
+    if (batteryInput) {
+        try { batteryInput.value = localStorage.getItem('battery_alert_threshold') || '15'; } catch (_) {}
+        batteryInput.onchange = () => { try { localStorage.setItem('battery_alert_threshold', String(Math.max(5, Math.min(50, Number(batteryInput.value) || 15)))); } catch (_) {} };
+    }
+}
+function saveEmergencyCard() {
+    const card = { name: document.getElementById('emergencyName').value.trim(), blood: document.getElementById('emergencyBlood').value.trim(),
+        allergies: document.getElementById('emergencyAllergies').value.trim(), contacts: document.getElementById('emergencyContacts').value.trim() };
+    try { localStorage.setItem('emergency_card', JSON.stringify(card)); renderEmergencyCard(); }
+    catch (_) { addMsg('ai', 'Could not save the emergency card on this device.'); }
+}
 function initThemes() {
     const picker = document.getElementById('themePicker');
     THEMES.forEach(t => {
@@ -1517,6 +1611,38 @@ function swapDropdownPlaces() {
     selB.value = tmp;
 }
 
+async function compareTravelModes() {
+    const origin = document.getElementById('pointA').value;
+    const destination = document.getElementById('pointB').value;
+    const via = (document.getElementById('pointVia').value || '').trim();
+    if (!origin || !destination || origin === destination) { addMsg('ai', 'Choose two different start and destination places first.'); return; }
+    const output = addMsg('ai', 'Comparing driving, walking, and Metro + walk. This may take a little while...');
+    const modes = [{ id: 'DRIVING', label: 'Driving' }, { id: 'WALKING', label: 'Walking' },
+        ...(!via ? [{ id: 'TRANSIT', label: 'Metro + walk' }] : [])];
+    const results = [];
+    try {
+        for (const mode of modes) {
+            const response = await fetch('/plan_route', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ origin: origin + ', Delhi, India', destination: destination + ', Delhi, India', mode: mode.id,
+                    via: via || null, session_id: SESSION_ID }) });
+            const data = await response.json();
+            if (!response.ok) throw new Error(mode.label + ': ' + (data.error || 'route unavailable'));
+            const route = data.routes[data.best];
+            results.push({ ...mode, route, data });
+        }
+        const ranked = results.slice().sort((a, b) => {
+            if (a.route.score === null && b.route.score !== null) return 1;
+            if (b.route.score === null && a.route.score !== null) return -1;
+            return (b.route.score ?? 0) - (a.route.score ?? 0) || a.route.secs - b.route.secs;
+        });
+        const best = ranked[0];
+        output.textContent = results.map(item => item.label + ': ' + Math.round(item.route.secs / 60) + ' min, '
+            + item.route.km.toFixed(1) + ' km, ' + (item.route.score === null ? 'score unavailable' : 'score ' + item.route.score + '/100')).join('\n')
+            + '\nRecommendation from available map data: ' + best.label + ' (' + Math.round(best.route.secs / 60) + ' min, '
+            + (best.route.score === null ? 'score unavailable' : best.route.score + '/100') + '). Scores are rough mapped-place signals, not live safety data.';
+        await planRoute(origin + ', Delhi, India', destination + ', Delhi, India', best.id, null, null, null, via);
+    } catch (error) { output.textContent = error.message || 'Could not compare these travel modes.'; output.classList.add('alert-msg'); }
+}
 async function planFromDropdowns() {
     const a = document.getElementById('pointA').value;
     const b = document.getElementById('pointB').value;
@@ -1530,7 +1656,8 @@ async function planFromDropdowns() {
         return;
     }
     addMsg('user', a + ' to ' + b + ' (' + mode.toLowerCase() + ')');
-    await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode);
+    const via = (document.getElementById('pointVia').value || '').trim();
+    await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode, null, null, via);
 }
 
 async function planFromCurrentLocation() {
@@ -1571,6 +1698,32 @@ async function planFromCurrentLocation() {
     }
 }
 
+async function findNearestHelp() {
+    const place = (document.getElementById('helpPlace').value || '').trim();
+    if (!place) { addMsg('ai', 'Enter a place such as Rohini, or use a nearby landmark.'); return; }
+    const status = addMsg('ai', 'Looking up mapped police stations and hospitals near ' + place + '...');
+    try {
+        const response = await fetch('/nearest_help', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ place }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Nearest help lookup failed.');
+        if (!data.results.length) { status.textContent = 'No matching police or hospital records were found in the nearby saved map tiles for ' + data.place + '. Coverage may be incomplete.'; return; }
+        clearMap();
+        const bounds = [[data.center.lat, data.center.lon]];
+        data.results.forEach(item => {
+            const marker = L.marker([item.lat, item.lon], { icon: pin(item.kind === 'police' ? 'P' : 'H', item.kind), zIndexOffset: 1200 }).addTo(map);
+            marker.bindTooltip(item.name + ' — ' + item.kind + ', ' + item.distance_km + ' km');
+            mapMarkers.push(marker); bounds.push([item.lat, item.lon]);
+        });
+        mapMarkers.push(L.marker([data.center.lat, data.center.lon], { icon: pin('⌖') }).addTo(map));
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+    setMobileView('map'); toggleMobileRoutes(true);
+        status.textContent = 'Nearest mapped help near ' + data.place + ': ' + data.results.map(item =>
+            item.name + ' (' + item.kind + ', about ' + item.distance_km + ' km straight-line)').join('; ')
+            + '. OpenStreetMap data may be incomplete; call 112 for immediate danger.';
+    } catch (error) { status.textContent = error.message || 'Nearest help lookup failed.'; status.classList.add('alert-msg'); }
+}
+
 /* ---------- map (Leaflet + OpenStreetMap data, no API key) ---------- */
 function pin(letter, cls) {
     return L.divIcon({ className: '', html: '<div class="pin ' + (cls || '') + '">' + letter + '</div>',
@@ -1587,6 +1740,16 @@ function initMap() {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
     addActivityOverlayControl();
+    map.on("click", event => {
+        if (!auditMapCapture) return;
+        const label = document.getElementById("auditLabel").value;
+        const line = event.latlng.lat.toFixed(6) + "," + event.latlng.lng.toFixed(6) + "," + label;
+        const box = document.getElementById("auditPoints");
+        box.value = box.value.trim() ? box.value.trim() + "\n" + line : line;
+        try { localStorage.setItem("audit_points_csv", box.value); } catch (_) {}
+        addMsg("ai", "Saved " + label + " audit point at " + event.latlng.lat.toFixed(5) + ", " + event.latlng.lng.toFixed(5) + ".");
+    });
+    try { document.getElementById("auditPoints").value = localStorage.getItem("audit_points_csv") || ""; } catch (_) {}
     setTimeout(() => map.invalidateSize(), 300);
 }
 function addActivityOverlayControl() {
@@ -1626,7 +1789,7 @@ function clearMap() {
 }
 
 /* ---------- route flow (routing + scoring happen in Python) ---------- */
-async function planRoute(origin, destination, mode, departureTime, originCoords, destinationCoords) {
+async function planRoute(origin, destination, mode, departureTime, originCoords, destinationCoords, viaPlace) {
     if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
     clearMap();
     const status = addMsg('ai', 'Checking the places and route from ' + origin + ' to ' + destination + '.');
@@ -1635,7 +1798,7 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
         const resp = await fetch('/plan_route', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ origin, destination, mode, departure_time: departureTime || null,
-                origin_coords: originCoords || null, destination_coords: destinationCoords || null, session_id: SESSION_ID })
+                origin_coords: originCoords || null, destination_coords: destinationCoords || null, via: viaPlace || null, session_id: SESSION_ID })
         });
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
@@ -1647,8 +1810,10 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
     }
 
     currentRoutes = data.routes;
-    const resolvedSummary = 'Resolved places: ' + data.resolved.origin + ' → ' + data.resolved.destination + '.\n';
-    lastTrip = { a: data.start, b: data.end, mode };
+    saveTripHistory(data, origin, destination, mode);
+    const resolvedSummary = 'Resolved places: ' + data.resolved.origin + (data.resolved.via ? ' via ' + data.resolved.via : '')
+        + ' → ' + data.resolved.destination + '.\n';
+    lastTrip = { a: data.start, b: data.end, via: data.via_location || null, mode };
     drawRoutes(data);
     setMobileView('map');
     toggleMobileRoutes(true);
@@ -1685,6 +1850,95 @@ async function explainRoutes(data) {
     document.getElementById('chatBox').scrollTop = 1e9;
 }
 
+let tripAlertWatchId = null, tripAlertBattery = null, tripAlertActive = false, tripAlertOffRoute = false, tripAlertBatteryHandler = null, tripAlertLastPosition = null, routeAlertCountdown = null;
+function pointSegmentDistanceMeters(point, start, end) {
+    const latScale = 111320, lonScale = Math.cos(point[0] * Math.PI / 180) * 111320;
+    const px = 0, py = 0, ax = (start[1] - point[1]) * lonScale, ay = (start[0] - point[0]) * latScale;
+    const bx = (end[1] - point[1]) * lonScale, by = (end[0] - point[0]) * latScale;
+    const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+    const t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
+    return Math.hypot(ax + t * dx, ay + t * dy);
+}
+function nearestRouteDistance(point, coords) {
+    let nearest = Infinity;
+    for (let i = 1; i < coords.length; i++) nearest = Math.min(nearest, pointSegmentDistanceMeters(point, coords[i - 1], coords[i]));
+    return nearest;
+}
+function preparedTripSms(message, point) {
+    const phone = localStorage.getItem('trusted_contact') || '';
+    const location = point ? ' https://maps.google.com/?q=' + point.lat + ',' + point.lon : '';
+    const link = el('a', 'btnlink', 'Review and send SMS to trusted contact');
+    link.href = 'sms:' + encodeURIComponent(phone) + '?body=' + encodeURIComponent(message + location);
+    const alert = addMsg('ai', message + (location ? ' Last position: ' + location : '') + ' The SMS is ready for review; tap to open your messaging app.');
+    alert.appendChild(link);
+}
+function showRouteDeviationPrompt(point) {
+    const panel = el('div', 'route-deviation-prompt');
+    panel.style.cssText = 'position:fixed;inset:12% 8%;z-index:100000;background:#7f1d1d;color:white;padding:24px;border-radius:16px;box-shadow:0 0 0 9999px #0009;text-align:center';
+    const title = el('h2', '', 'Are you OK?');
+    const timer = el('p', '', 'Checking in 30 seconds…');
+    const okay = el('button', 'primary', 'I’m OK');
+    let seconds = 30;
+    const dismiss = () => { if (routeAlertCountdown) clearInterval(routeAlertCountdown); routeAlertCountdown = null; panel.remove(); };
+    okay.addEventListener('click', () => { dismiss(); addMsg('ai', 'Thanks. Route monitoring continues.'); });
+    panel.append(title, el('p', '', 'Your phone appears more than 200 m from the chosen route.'), timer, okay);
+    document.body.appendChild(panel);
+    routeAlertCountdown = setInterval(() => {
+        seconds--;
+        timer.textContent = seconds > 0 ? 'If you do not respond, a message will be prepared for your contact in ' + seconds + ' seconds.' : 'Preparing a message…';
+        if (seconds <= 0) { dismiss(); preparedTripSms('I may need help. I moved more than 200 m from my planned route.', point); }
+    }, 1000);
+}
+function stopTripMonitoring() {
+    if (tripAlertWatchId !== null) navigator.geolocation.clearWatch(tripAlertWatchId);
+    tripAlertWatchId = null; tripAlertActive = false; tripAlertOffRoute = false;
+    if (routeAlertCountdown) clearInterval(routeAlertCountdown); routeAlertCountdown = null;
+    document.querySelectorAll('.route-deviation-prompt').forEach(panel => panel.remove());
+    if (tripAlertBattery && tripAlertBatteryHandler) tripAlertBattery.removeEventListener('levelchange', tripAlertBatteryHandler);
+    tripAlertBattery = null; tripAlertBatteryHandler = null;
+    const button = document.getElementById('tripMonitorButton'); if (button) button.textContent = 'Start phone trip alerts';
+}
+async function startTripMonitoring(route) {
+    if (tripAlertActive) { stopTripMonitoring(); addMsg('ai', 'Phone trip alerts stopped.'); return; }
+    if (!navigator.geolocation || !route || !route.coords || route.coords.length < 2) { addMsg('ai', 'Phone location monitoring is unavailable for this route.'); return; }
+    tripAlertActive = true;
+    const button = document.getElementById('tripMonitorButton'); if (button) button.textContent = 'Stop phone trip alerts';
+    tripAlertWatchId = navigator.geolocation.watchPosition(position => {
+        tripAlertLastPosition = { lat: position.coords.latitude, lon: position.coords.longitude };
+        if (position.coords.accuracy > 70) return;
+        const point = [tripAlertLastPosition.lat, tripAlertLastPosition.lon];
+        if (haversineJs(point[0], point[1], route.coords[route.coords.length - 1][0], route.coords[route.coords.length - 1][1]) < 100) {
+            preparedTripSms('I reached my destination safely.', tripAlertLastPosition); stopTripMonitoring(); return;
+        }
+        const distance = nearestRouteDistance(point, route.coords);
+        if (distance > 200 && !tripAlertOffRoute) {
+            tripAlertOffRoute = true;
+            showRouteDeviationPrompt(tripAlertLastPosition);
+        } else if (distance < 150) tripAlertOffRoute = false;
+    }, error => { addMsg('ai', error.code === 1 ? 'Location permission was denied; phone trip alerts stopped.' : 'Location updates are unavailable; phone trip alerts stopped.'); stopTripMonitoring(); },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+    try {
+        if (navigator.getBattery) {
+            tripAlertBattery = await navigator.getBattery();
+            tripAlertBatteryHandler = () => {
+                const input = document.getElementById('batteryAlertThreshold');
+                const threshold = Math.max(5, Math.min(50, Number(input && input.value) || 15)) / 100;
+                if (tripAlertActive && tripAlertBattery.level <= threshold) {
+                    preparedTripSms('My phone battery is low (' + Math.round(tripAlertBattery.level * 100) + '%). This is my last available position.', tripAlertLastPosition);
+                    stopTripMonitoring();
+                }
+            };
+            tripAlertBattery.addEventListener('levelchange', tripAlertBatteryHandler);
+            tripAlertBatteryHandler();
+        }
+    } catch (_) {}
+    if (tripAlertActive) addMsg('ai', 'Phone trip alerts are active while this page stays open and location is available. SMS links require you to review and send the message.');
+}
+function haversineJs(lat1, lon1, lat2, lon2) {
+    const rad = x => x * Math.PI / 180, dlat = rad(lat2 - lat1), dlon = rad(lon2 - lon1);
+    const a = Math.sin(dlat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dlon / 2) ** 2;
+    return 12742000 * Math.asin(Math.sqrt(a));
+}
 function drawRoutes(data) {
     const box = document.getElementById('routes');
     box.innerHTML = ''; box.style.display = 'flex';
@@ -1772,12 +2026,13 @@ function drawRoutes(data) {
         const engine = t.mode === 'WALKING' ? 'fossgis_osrm_foot' : 'fossgis_osrm_car';
         const url = (t.mode === 'TRANSIT' || t.mode === 'BUS')
             ? 'https://www.google.com/maps/dir/?api=1&origin=' + t.a.lat + ',' + t.a.lon
-              + '&destination=' + t.b.lat + ',' + t.b.lon + '&travelmode=transit'
+              + '&destination=' + t.b.lat + ',' + t.b.lon + (t.via ? '&waypoints=' + t.via.lat + ',' + t.via.lon : '') + '&travelmode=transit'
             : 'https://www.openstreetmap.org/directions?engine=' + engine
-              + '&route=' + encodeURIComponent(t.a.lat + ',' + t.a.lon + ';' + t.b.lat + ',' + t.b.lon);
+              + '&route=' + encodeURIComponent(t.a.lat + ',' + t.a.lon + ';' + (t.via ? t.via.lat + ',' + t.via.lon + ';' : '') + t.b.lat + ',' + t.b.lon);
         share.textContent = (await copyText(url)) ? 'Copied! Send it to a trusted contact' : 'Copy failed';
     });
     actions.appendChild(share);
+    const monitor = el('button', '', 'Start phone trip alerts'); monitor.id = 'tripMonitorButton'; monitor.addEventListener('click', () => startTripMonitoring(currentRoutes[selectedRouteIndex])); actions.appendChild(monitor);
     const how = el('button', '', 'How is this scored?');
     how.addEventListener('click', () => addMsg('ai',
         'How scoring works: along each route I check 5 to 10 spots for nearby police stations (worth the most), hospitals, '
@@ -1789,12 +2044,14 @@ function drawRoutes(data) {
     box.appendChild(actions);
 
     mapMarkers.push(L.marker([data.start.lat, data.start.lon], { icon: pin('A') }).addTo(map));
+    if (data.via_location) mapMarkers.push(L.marker([data.via_location.lat, data.via_location.lon], { icon: pin('C') }).addTo(map));
     mapMarkers.push(L.marker([data.end.lat, data.end.lon], { icon: pin('B') }).addTo(map));
     selectRoute(data.best);
     showDetails(data.best);
 }
 
 function selectRoute(i) {
+    selectedRouteIndex = i;
     routeLines.forEach((l, k) => {
         if (l._activity) {
             l._activityLayers.forEach(part => part.setStyle({ weight: k === i ? 7 : 5, opacity: k === i ? 1 : 0.62 }));
@@ -1821,7 +2078,12 @@ function selectRoute(i) {
         marker.bindTooltip((p.name || p.category) + ' — ' + p.category + ', about ' + p.distance_m + ' m from route');
         placeMarkers.push(marker);
     });
-    (currentRoutes[i].stations || []).forEach(st => {
+    (currentRoutes[i].empty_points || []).forEach((point, index) => {
+        const marker = L.circleMarker([point.lat, point.lon], { radius: 7, color: '#991b1b', weight: 2,
+            fillColor: '#ef4444', fillOpacity: 0.95 }).addTo(map);
+        marker.bindTooltip('Mapped-place gap ' + (index + 1) + ': no matching place found near this checked route point. This does not prove the street is empty.');
+        placeMarkers.push(marker);
+    });    (currentRoutes[i].stations || []).forEach(st => {
         const m = L.marker([st.lat, st.lon], { icon: pin(st.kind === 'bus' ? '🚌' : 'M', st.kind === 'bus' ? 'bus' : 'metro'), zIndexOffset: 1000 }).addTo(map);
         const label = st.role === 'get on' ? 'Get on: ' : st.role === 'get off' ? 'Get off: ' : 'Change: ';
         m.bindTooltip(label + st.name, { permanent: true, direction: 'top', offset: [0, -14] });
@@ -2114,6 +2376,35 @@ function syncPersonalPlaceOptions() {
 function updateCheckInStatus(message) {
     const status = document.getElementById('checkInStatus');
     if (status) status.textContent = message;
+}
+function toggleAuditMapCapture() {
+    auditMapCapture = !auditMapCapture;
+    const buttons = document.querySelectorAll('button[onclick="toggleAuditMapCapture()"]');
+    buttons.forEach(button => { button.textContent = auditMapCapture ? 'Tap the map to save a point (tap to stop)' : 'Add audit point from map'; button.classList.toggle('primary', auditMapCapture); });
+    addMsg('ai', auditMapCapture ? 'Choose Busy or Empty, then tap the map where you observed the point.' : 'Map audit capture stopped.');
+}
+function downloadAuditCsv() {
+    const text = document.getElementById('auditPoints').value.trim();
+    if (!text) { addMsg('ai', 'Add audit points before downloading the CSV.'); return; }
+    const blob = new Blob(['latitude,longitude,label\n' + text + '\n'], { type: 'text/csv' });
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'safety_audit_points.csv'; link.click(); URL.revokeObjectURL(link.href);
+}
+async function loadAuditCsv(file) {
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const rows = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        const normalized = [];
+        rows.forEach((row, index) => {
+            const columns = row.split(row.includes('\t') ? '\t' : ',').map(value => value.trim().replace(/^"|"$/g, ''));
+            if (index === 0 && !Number.isFinite(Number(columns[0]))) return; // optional header row
+            if (columns.length >= 3) normalized.push(columns.slice(0, 3).join(','));
+        });
+        document.getElementById('auditPoints').value = normalized.join('\n');
+        await compareAuditPoints();
+    } catch (_) {
+        document.getElementById('auditResult').textContent = 'Could not read that CSV. Use columns latitude, longitude, label (busy or empty).';
+    }
 }
 async function compareAuditPoints() {
     const rows = document.getElementById('auditPoints').value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -2415,6 +2706,7 @@ function endFake() {
 }
 if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => {};   // loads the voice list early
 initThemes();
+renderEmergencyCard();
 initPlaceDropdowns();
 syncMobileLayout();
 window.addEventListener('resize', syncMobileLayout);
@@ -2524,6 +2816,8 @@ MOBILE_HTML_TEMPLATE = r"""
     button:hover { background: var(--accent-hover); }
     .timer { color: #888; font-size: 11px; text-align: right; margin-top: 5px; min-height: 14px; }
 
+    @keyframes safety-alarm-flash { from { background: rgba(220,38,38,0.08); } to { background: rgba(220,38,38,0.62); } }
+    body.safety-alarm-flash::after { content: ""; position: fixed; inset: 0; z-index: 99999; pointer-events: none; background: rgba(220,38,38,.55); mix-blend-mode: screen; }
     #sosPanel { display: none; position: absolute; inset: 0; background: #2a2a35; border-radius: 16px; padding: 20px; z-index: 10; overflow-y: auto; }
     #sosPanel h3 { margin: 0 0 10px; color: #ff1744; }
     .helpline { display: flex; justify-content: space-between; background: #15151c; padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
@@ -2707,7 +3001,10 @@ MOBILE_HTML_TEMPLATE = r"""
             <select id="pointB" title="Destination point (B)"></select>
             <button class="go-btn" onclick="planFromDropdowns()">Find Route</button>
         </div>
+        <input id="pointVia" type="text" placeholder="Optional stop C (via)" aria-label="Optional stop to pass through">
+        <button type="button" onclick="compareTravelModes()">Compare driving, walking &amp; Metro</button>
         <button class="location-route-btn" type="button" onclick="planFromCurrentLocation()">&#x1F4CD; Route from my current location</button>
+        <div class="quick-route-row"><input id="helpPlace" type="text" placeholder="Nearest police / hospital near…" aria-label="Place to search for nearest police station or hospital"><button type="button" onclick="findNearestHelp()">Find nearest help</button></div>
     </details>
 
     <div class="chat-box" id="chatBox"></div>
@@ -2746,6 +3043,14 @@ MOBILE_HTML_TEMPLATE = r"""
         <textarea id="sosMsg" readonly>I need help. Please call me or contact the police.</textarea>
         <div id="locStatus" class="small"></div>
 
+        <div class="safety-card"><h4>Recent trips (stored on this device)</h4><button type="button" onclick="renderTripHistory()">Show trip history</button><div id="tripHistoryDisplay" class="small"></div></div>
+        <div class="safety-card"><h4>Emergency card (stored on this device)</h4>
+        <input id="emergencyName" type="text" placeholder="Name">
+        <input id="emergencyBlood" type="text" placeholder="Blood group (optional)">
+        <input id="emergencyAllergies" type="text" placeholder="Allergies / medical notes">
+        <input id="emergencyContacts" type="text" placeholder="Two emergency contacts">
+        <button type="button" onclick="saveEmergencyCard()">Save emergency card</button>
+        <div id="emergencyCardDisplay" class="small" aria-live="polite"></div></div>
         <h4>Trusted contact</h4>
         <input id="contactInput" type="text" placeholder="Phone number, e.g. +919876543210">
         <textarea id="additionalContacts" placeholder="More trusted numbers, one per line"></textarea>
@@ -2758,6 +3063,7 @@ MOBILE_HTML_TEMPLATE = r"""
         <select id="checkInContact" aria-label="Contact for check-in reminder"></select>
         <div class="row"><input id="checkInMinutes" type="number" min="1" max="720" value="40" aria-label="Minutes until check-in"><button onclick="startCheckIn()">Start timer</button><button onclick="confirmCheckIn()">I'm home</button></div>
         <div id="checkInStatus" class="small">Choose how many minutes until you expect to be home.</div>
+        <label class="small" for="batteryAlertThreshold">Low battery alert at (%)</label><input id="batteryAlertThreshold" type="number" min="5" max="50" value="15">
         <div class="safety-card"><h4>Saved places (stored on this device)</h4>
         <input id="homePlace" type="text" placeholder="Home place name">
         <input id="workPlace" type="text" placeholder="Work place name">
@@ -2771,8 +3077,10 @@ MOBILE_HTML_TEMPLATE = r"""
         </div>
         <div class="safety-card">
         <h4>Check score against your audit points</h4>
-        <p class="small">Paste latitude, longitude, and your own label (busy or empty), one point per line.</p>
+        <p class="small">Paste latitude, longitude, and label, one point per line. Map capture and CSV preserve busy, safe, dark, and empty labels; score comparison uses busy/empty rows.</p>
         <textarea id="auditPoints" placeholder="28.6139,77.2090,busy"></textarea>
+        <input type="file" id="auditCsv" accept=".csv,text/csv" onchange="loadAuditCsv(this.files[0])" aria-label="Import audit points CSV">
+        <div class="row"><select id="auditLabel"><option value="busy">Busy</option><option value="safe">Safe</option><option value="dark">Dark</option><option value="empty">Empty</option></select><button type="button" onclick="toggleAuditMapCapture()">Add audit point from map</button><button type="button" onclick="downloadAuditCsv()">Download audit CSV</button></div>
         <button onclick="compareAuditPoints()">Compare audit points</button>
         <div id="auditResult" class="small"></div>
         </div>
@@ -2857,9 +3165,10 @@ const COMMON_PLACES = __COMMON_PLACES__;
 ];
 
 let map = null;
+let auditMapCapture = false;
 let routeLines = [], mapMarkers = [], placeMarkers = [], lastDetail = -1, chatHistory = [], routeActivityLegend = null;
 let speechRecognition = null, checkInTimerHandle = null, nativeVoiceActive = false;
-let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null;
+let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null, selectedRouteIndex = 0;
 
 /* ---------- small helpers (all text via textContent => no XSS) ---------- */
 function el(tag, cls, text) {
@@ -2898,6 +3207,82 @@ function setTheme(themeId) {
     try { localStorage.setItem('app_theme', t.id); } catch (e) {}
 }
 
+let alarmAudioContext = null, alarmOscillator = null, alarmInterval = null;
+function toggleLoudAlarm() {
+    if (alarmInterval) {
+        clearInterval(alarmInterval); alarmInterval = null;
+        try { alarmOscillator.stop(); } catch (_) {}
+        alarmOscillator = null;
+        document.body.classList.remove('safety-alarm-flash');
+        const button = document.querySelector('#sosPanel .sos-btn');
+        if (button) button.textContent = '🚨 Sound loud alarm';
+        if (navigator.vibrate) navigator.vibrate(0);
+        return;
+    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) { addMsg('ai', 'This browser does not support the alarm sound.'); return; }
+    try {
+        alarmAudioContext = alarmAudioContext || new AudioContextClass();
+        alarmAudioContext.resume();
+        alarmOscillator = alarmAudioContext.createOscillator();
+        const gain = alarmAudioContext.createGain();
+        alarmOscillator.type = 'square'; gain.gain.value = 0.18;
+        alarmOscillator.connect(gain); gain.connect(alarmAudioContext.destination);
+        alarmOscillator.frequency.value = 880; alarmOscillator.start();
+        let high = false;
+        alarmInterval = setInterval(() => {
+            high = !high; alarmOscillator.frequency.setValueAtTime(high ? 1100 : 700, alarmAudioContext.currentTime);
+            document.body.classList.toggle('safety-alarm-flash', high);
+            if (navigator.vibrate) navigator.vibrate(high ? [250, 100, 250] : 0);
+        }, 350);
+        const button = document.querySelector('#sosPanel .sos-btn');
+        if (button) button.textContent = 'Stop loud alarm';
+    } catch (_) { addMsg('ai', 'Could not start the alarm sound. Check device volume and browser audio permission.'); }
+}
+function saveTripHistory(data, origin, destination, mode) {
+    try {
+        const history = JSON.parse(localStorage.getItem('trip_history') || '[]');
+        const route = data.routes[data.best];
+        history.unshift({ origin, destination, mode, score: route.score, minutes: Math.round(route.secs / 60), at: Date.now() });
+        localStorage.setItem('trip_history', JSON.stringify(history.slice(0, 20)));
+    } catch (_) {}
+}
+function renderTripHistory() {
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem('trip_history') || '[]'); } catch (_) {}
+    const display = document.getElementById('tripHistoryDisplay'); if (!display) return;
+    if (!history.length) { display.textContent = 'No trips saved yet.'; return; }
+    const latest = history[0];
+    const comparable = history.filter(item => item.mode === latest.mode && typeof item.score === 'number');
+    const prior = comparable.slice(1);
+    const nudge = prior.length && typeof latest.score === 'number' && latest.score < prior.reduce((sum, item) => sum + item.score, 0) / prior.length - 5
+        ? ' This score is lower than your recent average for this mode.' : '';
+    display.textContent = history.slice(0, 10).map(item => item.origin + ' → ' + item.destination + ' · '
+        + (item.score === null ? 'score unavailable' : item.score + '/100') + ' · ' + item.minutes + ' min · '
+        + new Date(item.at).toLocaleDateString()).join('\n') + nudge;
+}
+function renderEmergencyCard() {
+    let card = {};
+    try { card = JSON.parse(localStorage.getItem('emergency_card') || '{}'); } catch (_) {}
+    ['Name', 'Blood', 'Allergies', 'Contacts'].forEach((key, index) => {
+        const id = ['emergencyName', 'emergencyBlood', 'emergencyAllergies', 'emergencyContacts'][index];
+        const input = document.getElementById(id); if (input) input.value = card[key.toLowerCase()] || '';
+    });
+    const display = document.getElementById('emergencyCardDisplay');
+    if (display) display.textContent = card.name ? 'Emergency card: ' + card.name + (card.blood ? ' · Blood group ' + card.blood : '')
+        + (card.allergies ? ' · Allergies / notes: ' + card.allergies : '') + (card.contacts ? ' · Contacts: ' + card.contacts : '') : 'No emergency card saved.';
+    const batteryInput = document.getElementById('batteryAlertThreshold');
+    if (batteryInput) {
+        batteryInput.value = localStorage.getItem('battery_alert_threshold') || '15';
+        batteryInput.onchange = () => { try { localStorage.setItem('battery_alert_threshold', String(Math.max(5, Math.min(50, Number(batteryInput.value) || 15)))); } catch (_) {} };
+    }
+}
+function saveEmergencyCard() {
+    const card = { name: document.getElementById('emergencyName').value.trim(), blood: document.getElementById('emergencyBlood').value.trim(),
+        allergies: document.getElementById('emergencyAllergies').value.trim(), contacts: document.getElementById('emergencyContacts').value.trim() };
+    try { localStorage.setItem('emergency_card', JSON.stringify(card)); renderEmergencyCard(); }
+    catch (_) { addMsg('ai', 'Could not save the emergency card on this device.'); }
+}
 function initThemes() {
     const picker = document.getElementById('themePicker');
     THEMES.forEach(t => {
@@ -2936,6 +3321,37 @@ function swapDropdownPlaces() {
     selB.value = tmp;
 }
 
+async function compareTravelModes() {
+    const origin = document.getElementById('pointA').value;
+    const destination = document.getElementById('pointB').value;
+    const via = (document.getElementById('pointVia').value || '').trim();
+    if (!origin || !destination || origin === destination) { addMsg('ai', 'Choose two different start and destination places first.'); return; }
+    const output = addMsg('ai', 'Comparing driving, walking, and Metro + walk. This may take a little while...');
+    const modes = [{ id: 'DRIVING', label: 'Driving' }, { id: 'WALKING', label: 'Walking' },
+        ...(!via ? [{ id: 'TRANSIT', label: 'Metro + walk' }] : [])];
+    const results = [];
+    try {
+        for (const mode of modes) {
+            const response = await fetch('/plan_route', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ origin: origin + ', Delhi, India', destination: destination + ', Delhi, India', mode: mode.id, via: via || null, session_id: SESSION_ID }) });
+            const data = await response.json();
+            if (!response.ok) throw new Error(mode.label + ': ' + (data.error || 'route unavailable'));
+            const route = data.routes[data.best];
+            results.push({ ...mode, route, data });
+        }
+        const ranked = results.slice().sort((a, b) => {
+            if (a.route.score === null && b.route.score !== null) return 1;
+            if (b.route.score === null && a.route.score !== null) return -1;
+            return (b.route.score ?? 0) - (a.route.score ?? 0) || a.route.secs - b.route.secs;
+        });
+        const best = ranked[0];
+        output.textContent = results.map(item => item.label + ': ' + Math.round(item.route.secs / 60) + ' min, '
+            + item.route.km.toFixed(1) + ' km, ' + (item.route.score === null ? 'score unavailable' : 'score ' + item.route.score + '/100')).join('\n')
+            + '\nRecommendation from available map data: ' + best.label + ' (' + Math.round(best.route.secs / 60) + ' min, '
+            + (best.route.score === null ? 'score unavailable' : best.route.score + '/100') + '). Scores are rough mapped-place signals, not live safety data.';
+        await planRoute(origin + ', Delhi, India', destination + ', Delhi, India', best.id, null, null, null, via);
+    } catch (error) { output.textContent = error.message || 'Could not compare these travel modes.'; output.classList.add('alert-msg'); }
+}
 async function planFromDropdowns() {
     const a = document.getElementById('pointA').value;
     const b = document.getElementById('pointB').value;
@@ -2949,8 +3365,36 @@ async function planFromDropdowns() {
         return;
     }
     addMsg('user', a + ' to ' + b + ' (' + mode.toLowerCase() + ')');
-    await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode);
+    const via = (document.getElementById('pointVia').value || '').trim();
+    await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode, null, null, via);
 }
+
+async function findNearestHelp() {
+    const place = (document.getElementById('helpPlace').value || '').trim();
+    if (!place) { addMsg('ai', 'Enter a place such as Rohini, or use a nearby landmark.'); return; }
+    const status = addMsg('ai', 'Looking up mapped police stations and hospitals near ' + place + '...');
+    try {
+        const response = await fetch('/nearest_help', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ place }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Nearest help lookup failed.');
+        if (!data.results.length) { status.textContent = 'No matching police or hospital records were found in the nearby saved map tiles for ' + data.place + '. Coverage may be incomplete.'; return; }
+        clearMap();
+        const bounds = [[data.center.lat, data.center.lon]];
+        data.results.forEach(item => {
+            const marker = L.marker([item.lat, item.lon], { icon: pin(item.kind === 'police' ? 'P' : 'H', item.kind), zIndexOffset: 1200 }).addTo(map);
+            marker.bindTooltip(item.name + ' — ' + item.kind + ', ' + item.distance_km + ' km');
+            mapMarkers.push(marker); bounds.push([item.lat, item.lon]);
+        });
+        mapMarkers.push(L.marker([data.center.lat, data.center.lon], { icon: pin('⌖') }).addTo(map));
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+    setMobileView('map'); toggleMobileRoutes(true);
+        status.textContent = 'Nearest mapped help near ' + data.place + ': ' + data.results.map(item =>
+            item.name + ' (' + item.kind + ', about ' + item.distance_km + ' km straight-line)').join('; ')
+            + '. OpenStreetMap data may be incomplete; call 112 for immediate danger.';
+    } catch (error) { status.textContent = error.message || 'Nearest help lookup failed.'; status.classList.add('alert-msg'); }
+}
+
 
 async function planFromCurrentLocation() {
     const destination = document.getElementById('pointB').value;
@@ -3006,6 +3450,16 @@ function initMap() {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
     addActivityOverlayControl();
+    map.on("click", event => {
+        if (!auditMapCapture) return;
+        const label = document.getElementById("auditLabel").value;
+        const line = event.latlng.lat.toFixed(6) + "," + event.latlng.lng.toFixed(6) + "," + label;
+        const box = document.getElementById("auditPoints");
+        box.value = box.value.trim() ? box.value.trim() + "\n" + line : line;
+        try { localStorage.setItem("audit_points_csv", box.value); } catch (_) {}
+        addMsg("ai", "Saved " + label + " audit point at " + event.latlng.lat.toFixed(5) + ", " + event.latlng.lng.toFixed(5) + ".");
+    });
+    try { document.getElementById("auditPoints").value = localStorage.getItem("audit_points_csv") || ""; } catch (_) {}
     setTimeout(() => map.invalidateSize(), 300);
 }
 function addActivityOverlayControl() {
@@ -3045,7 +3499,7 @@ function clearMap() {
 }
 
 /* ---------- route flow (routing + scoring happen in Python) ---------- */
-async function planRoute(origin, destination, mode, departureTime, originCoords, destinationCoords) {
+async function planRoute(origin, destination, mode, departureTime, originCoords, destinationCoords, viaPlace) {
     if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
     clearMap();
     const status = addMsg('ai', 'Finding routes and checking places along each one. The first trip in a new area can take up to a minute; later trips there are much faster...');
@@ -3054,7 +3508,7 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
         const resp = await fetch('/plan_route', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ origin, destination, mode, departure_time: departureTime || null,
-                origin_coords: originCoords || null, destination_coords: destinationCoords || null, session_id: SESSION_ID })
+                origin_coords: originCoords || null, destination_coords: destinationCoords || null, via: viaPlace || null, session_id: SESSION_ID })
         });
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
@@ -3065,7 +3519,8 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
     }
 
     currentRoutes = data.routes;
-    lastTrip = { a: data.start, b: data.end, mode };
+    saveTripHistory(data, origin, destination, mode);
+    lastTrip = { a: data.start, b: data.end, via: data.via_location || null, mode };
     drawRoutes(data);
     setMobileView('map');
     toggleMobileRoutes(true);
@@ -3102,6 +3557,95 @@ async function explainRoutes(data) {
     document.getElementById('chatBox').scrollTop = 1e9;
 }
 
+let tripAlertWatchId = null, tripAlertBattery = null, tripAlertActive = false, tripAlertOffRoute = false, tripAlertBatteryHandler = null, tripAlertLastPosition = null, routeAlertCountdown = null;
+function pointSegmentDistanceMeters(point, start, end) {
+    const latScale = 111320, lonScale = Math.cos(point[0] * Math.PI / 180) * 111320;
+    const px = 0, py = 0, ax = (start[1] - point[1]) * lonScale, ay = (start[0] - point[0]) * latScale;
+    const bx = (end[1] - point[1]) * lonScale, by = (end[0] - point[0]) * latScale;
+    const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+    const t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
+    return Math.hypot(ax + t * dx, ay + t * dy);
+}
+function nearestRouteDistance(point, coords) {
+    let nearest = Infinity;
+    for (let i = 1; i < coords.length; i++) nearest = Math.min(nearest, pointSegmentDistanceMeters(point, coords[i - 1], coords[i]));
+    return nearest;
+}
+function preparedTripSms(message, point) {
+    const phone = localStorage.getItem('trusted_contact') || '';
+    const location = point ? ' https://maps.google.com/?q=' + point.lat + ',' + point.lon : '';
+    const link = el('a', 'btnlink', 'Review and send SMS to trusted contact');
+    link.href = 'sms:' + encodeURIComponent(phone) + '?body=' + encodeURIComponent(message + location);
+    const alert = addMsg('ai', message + (location ? ' Last position: ' + location : '') + ' The SMS is ready for review; tap to open your messaging app.');
+    alert.appendChild(link);
+}
+function showRouteDeviationPrompt(point) {
+    const panel = el('div', 'route-deviation-prompt');
+    panel.style.cssText = 'position:fixed;inset:12% 8%;z-index:100000;background:#7f1d1d;color:white;padding:24px;border-radius:16px;box-shadow:0 0 0 9999px #0009;text-align:center';
+    const title = el('h2', '', 'Are you OK?');
+    const timer = el('p', '', 'Checking in 30 seconds…');
+    const okay = el('button', 'primary', 'I’m OK');
+    let seconds = 30;
+    const dismiss = () => { if (routeAlertCountdown) clearInterval(routeAlertCountdown); routeAlertCountdown = null; panel.remove(); };
+    okay.addEventListener('click', () => { dismiss(); addMsg('ai', 'Thanks. Route monitoring continues.'); });
+    panel.append(title, el('p', '', 'Your phone appears more than 200 m from the chosen route.'), timer, okay);
+    document.body.appendChild(panel);
+    routeAlertCountdown = setInterval(() => {
+        seconds--;
+        timer.textContent = seconds > 0 ? 'If you do not respond, a message will be prepared for your contact in ' + seconds + ' seconds.' : 'Preparing a message…';
+        if (seconds <= 0) { dismiss(); preparedTripSms('I may need help. I moved more than 200 m from my planned route.', point); }
+    }, 1000);
+}
+function stopTripMonitoring() {
+    if (tripAlertWatchId !== null) navigator.geolocation.clearWatch(tripAlertWatchId);
+    tripAlertWatchId = null; tripAlertActive = false; tripAlertOffRoute = false;
+    if (routeAlertCountdown) clearInterval(routeAlertCountdown); routeAlertCountdown = null;
+    document.querySelectorAll('.route-deviation-prompt').forEach(panel => panel.remove());
+    if (tripAlertBattery && tripAlertBatteryHandler) tripAlertBattery.removeEventListener('levelchange', tripAlertBatteryHandler);
+    tripAlertBattery = null; tripAlertBatteryHandler = null;
+    const button = document.getElementById('tripMonitorButton'); if (button) button.textContent = 'Start phone trip alerts';
+}
+async function startTripMonitoring(route) {
+    if (tripAlertActive) { stopTripMonitoring(); addMsg('ai', 'Phone trip alerts stopped.'); return; }
+    if (!navigator.geolocation || !route || !route.coords || route.coords.length < 2) { addMsg('ai', 'Phone location monitoring is unavailable for this route.'); return; }
+    tripAlertActive = true;
+    const button = document.getElementById('tripMonitorButton'); if (button) button.textContent = 'Stop phone trip alerts';
+    tripAlertWatchId = navigator.geolocation.watchPosition(position => {
+        tripAlertLastPosition = { lat: position.coords.latitude, lon: position.coords.longitude };
+        if (position.coords.accuracy > 70) return;
+        const point = [tripAlertLastPosition.lat, tripAlertLastPosition.lon];
+        if (haversineJs(point[0], point[1], route.coords[route.coords.length - 1][0], route.coords[route.coords.length - 1][1]) < 100) {
+            preparedTripSms('I reached my destination safely.', tripAlertLastPosition); stopTripMonitoring(); return;
+        }
+        const distance = nearestRouteDistance(point, route.coords);
+        if (distance > 200 && !tripAlertOffRoute) {
+            tripAlertOffRoute = true;
+            showRouteDeviationPrompt(tripAlertLastPosition);
+        } else if (distance < 150) tripAlertOffRoute = false;
+    }, error => { addMsg('ai', error.code === 1 ? 'Location permission was denied; phone trip alerts stopped.' : 'Location updates are unavailable; phone trip alerts stopped.'); stopTripMonitoring(); },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+    try {
+        if (navigator.getBattery) {
+            tripAlertBattery = await navigator.getBattery();
+            tripAlertBatteryHandler = () => {
+                const input = document.getElementById('batteryAlertThreshold');
+                const threshold = Math.max(5, Math.min(50, Number(input && input.value) || 15)) / 100;
+                if (tripAlertActive && tripAlertBattery.level <= threshold) {
+                    preparedTripSms('My phone battery is low (' + Math.round(tripAlertBattery.level * 100) + '%). This is my last available position.', tripAlertLastPosition);
+                    stopTripMonitoring();
+                }
+            };
+            tripAlertBattery.addEventListener('levelchange', tripAlertBatteryHandler);
+            tripAlertBatteryHandler();
+        }
+    } catch (_) {}
+    if (tripAlertActive) addMsg('ai', 'Phone trip alerts are active while this page stays open and location is available. SMS links require you to review and send the message.');
+}
+function haversineJs(lat1, lon1, lat2, lon2) {
+    const rad = x => x * Math.PI / 180, dlat = rad(lat2 - lat1), dlon = rad(lon2 - lon1);
+    const a = Math.sin(dlat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dlon / 2) ** 2;
+    return 12742000 * Math.asin(Math.sqrt(a));
+}
 function drawRoutes(data) {
     const box = document.getElementById('routes');
     box.innerHTML = ''; box.style.display = 'flex';
@@ -3189,12 +3733,13 @@ function drawRoutes(data) {
         const engine = t.mode === 'WALKING' ? 'fossgis_osrm_foot' : 'fossgis_osrm_car';
         const url = (t.mode === 'TRANSIT' || t.mode === 'BUS')
             ? 'https://www.google.com/maps/dir/?api=1&origin=' + t.a.lat + ',' + t.a.lon
-              + '&destination=' + t.b.lat + ',' + t.b.lon + '&travelmode=transit'
+              + '&destination=' + t.b.lat + ',' + t.b.lon + (t.via ? '&waypoints=' + t.via.lat + ',' + t.via.lon : '') + '&travelmode=transit'
             : 'https://www.openstreetmap.org/directions?engine=' + engine
-              + '&route=' + encodeURIComponent(t.a.lat + ',' + t.a.lon + ';' + t.b.lat + ',' + t.b.lon);
+              + '&route=' + encodeURIComponent(t.a.lat + ',' + t.a.lon + ';' + (t.via ? t.via.lat + ',' + t.via.lon + ';' : '') + t.b.lat + ',' + t.b.lon);
         share.textContent = (await copyText(url)) ? 'Copied! Send it to a trusted contact' : 'Copy failed';
     });
     actions.appendChild(share);
+    const monitor = el('button', '', 'Start phone trip alerts'); monitor.id = 'tripMonitorButton'; monitor.addEventListener('click', () => startTripMonitoring(currentRoutes[selectedRouteIndex])); actions.appendChild(monitor);
     const how = el('button', '', 'How is this scored?');
     how.addEventListener('click', () => addMsg('ai',
         'How scoring works: along each route I check 5 to 10 spots for nearby police stations (worth the most), hospitals, '
@@ -3206,12 +3751,14 @@ function drawRoutes(data) {
     box.appendChild(actions);
 
     mapMarkers.push(L.marker([data.start.lat, data.start.lon], { icon: pin('A') }).addTo(map));
+    if (data.via_location) mapMarkers.push(L.marker([data.via_location.lat, data.via_location.lon], { icon: pin('C') }).addTo(map));
     mapMarkers.push(L.marker([data.end.lat, data.end.lon], { icon: pin('B') }).addTo(map));
     selectRoute(data.best);
     showDetails(data.best);
 }
 
 function selectRoute(i) {
+    selectedRouteIndex = i;
     routeLines.forEach((l, k) => {
         if (l._activity) {
             l._activityLayers.forEach(part => part.setStyle({ weight: k === i ? 7 : 5, opacity: k === i ? 1 : 0.62 }));
@@ -3238,7 +3785,12 @@ function selectRoute(i) {
         marker.bindTooltip((p.name || p.category) + ' — ' + p.category + ', about ' + p.distance_m + ' m from route');
         placeMarkers.push(marker);
     });
-    (currentRoutes[i].stations || []).forEach(st => {
+    (currentRoutes[i].empty_points || []).forEach((point, index) => {
+        const marker = L.circleMarker([point.lat, point.lon], { radius: 7, color: '#991b1b', weight: 2,
+            fillColor: '#ef4444', fillOpacity: 0.95 }).addTo(map);
+        marker.bindTooltip('Mapped-place gap ' + (index + 1) + ': no matching place found near this checked route point. This does not prove the street is empty.');
+        placeMarkers.push(marker);
+    });    (currentRoutes[i].stations || []).forEach(st => {
         const m = L.marker([st.lat, st.lon], { icon: pin(st.kind === 'bus' ? '🚌' : 'M', st.kind === 'bus' ? 'bus' : 'metro'), zIndexOffset: 1000 }).addTo(map);
         const label = st.role === 'get on' ? 'Get on: ' : st.role === 'get off' ? 'Get off: ' : 'Change: ';
         m.bindTooltip(label + st.name, { permanent: true, direction: 'top', offset: [0, -14] });
@@ -3521,6 +4073,35 @@ function syncPersonalPlaceOptions() {
 function updateCheckInStatus(message) {
     const status = document.getElementById('checkInStatus');
     if (status) status.textContent = message;
+}
+function toggleAuditMapCapture() {
+    auditMapCapture = !auditMapCapture;
+    const buttons = document.querySelectorAll('button[onclick="toggleAuditMapCapture()"]');
+    buttons.forEach(button => { button.textContent = auditMapCapture ? 'Tap the map to save a point (tap to stop)' : 'Add audit point from map'; button.classList.toggle('primary', auditMapCapture); });
+    addMsg('ai', auditMapCapture ? 'Choose Busy or Empty, then tap the map where you observed the point.' : 'Map audit capture stopped.');
+}
+function downloadAuditCsv() {
+    const text = document.getElementById('auditPoints').value.trim();
+    if (!text) { addMsg('ai', 'Add audit points before downloading the CSV.'); return; }
+    const blob = new Blob(['latitude,longitude,label\n' + text + '\n'], { type: 'text/csv' });
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'safety_audit_points.csv'; link.click(); URL.revokeObjectURL(link.href);
+}
+async function loadAuditCsv(file) {
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const rows = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        const normalized = [];
+        rows.forEach((row, index) => {
+            const columns = row.split(row.includes('\t') ? '\t' : ',').map(value => value.trim().replace(/^"|"$/g, ''));
+            if (index === 0 && !Number.isFinite(Number(columns[0]))) return; // optional header row
+            if (columns.length >= 3) normalized.push(columns.slice(0, 3).join(','));
+        });
+        document.getElementById('auditPoints').value = normalized.join('\n');
+        await compareAuditPoints();
+    } catch (_) {
+        document.getElementById('auditResult').textContent = 'Could not read that CSV. Use columns latitude, longitude, label (busy or empty).';
+    }
 }
 async function compareAuditPoints() {
     const rows = document.getElementById('auditPoints').value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -3807,6 +4388,7 @@ function endFake() {
 }
 if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => {};   // loads the voice list early
 initThemes();
+renderEmergencyCard();
 initPlaceDropdowns();
 syncMobileLayout();
 window.addEventListener('resize', syncMobileLayout);
@@ -4378,10 +4960,94 @@ def route_points(rt: dict, mode: str):
     return sample_along(rt["coords"], n), radius
 
 
+_OPENING_DAYS = {"Mo": 0, "Tu": 1, "We": 2, "Th": 3, "Fr": 4, "Sa": 5, "Su": 6}
+
+
+def opening_hours_state(schedule: str, hour: float | None = None) -> bool | None:
+    """Read common weekly OSM opening_hours rules; return None for schedules we cannot parse."""
+    text = str(schedule or "").strip()
+    if not text:
+        return None
+    if re.fullmatch(r"24\s*/\s*7", text, re.I):
+        return True
+    if re.fullmatch(r"(?:closed|off)", text, re.I):
+        return False
+    try:
+        today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).weekday()
+    except Exception:
+        today = datetime.datetime.now().weekday()
+    if hour is None:
+        now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+        hour = now.hour + now.minute / 60
+    rules = [part.strip() for part in text.split(";") if part.strip()]
+    has_day_rule = any(re.search(r"\b(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:\s*-\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))?\b", part) for part in rules)
+    matched_rule = False
+    saw_parseable_rule = False
+    for rule in rules:
+        day_match = re.match(r"^((?:(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:\s*-\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))?)(?:\s*,\s*(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:\s*-\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))?)*)\s+(.+)$", rule)
+        day_expr, times = (day_match.group(1), day_match.group(2)) if day_match else ("", rule)
+        applies_today = not day_expr
+        if day_expr:
+            applies_today = any(_day_token_matches(token, today) for token in re.findall(
+                r"(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:\s*-\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))?", day_expr))
+        if re.fullmatch(r"24\s*/\s*7", times, re.I):
+            saw_parseable_rule = True
+            if applies_today:
+                return True
+            continue
+        time_ranges = re.findall(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", times)
+        if not time_ranges:
+            if re.search(r"\b(?:off|closed)\b", times, re.I) and day_expr:
+                saw_parseable_rule = True
+                if applies_today:
+                    matched_rule = True
+            continue
+        saw_parseable_rule = True
+        if not applies_today:
+            continue
+        matched_rule = True
+        for start, end in time_ranges:
+            try:
+                start_hour = int(start.split(":")[0]) + int(start.split(":")[1]) / 60
+                end_hour = int(end.split(":")[0]) + int(end.split(":")[1]) / 60
+            except (ValueError, IndexError):
+                return None
+            is_open = (start_hour <= hour < end_hour) if start_hour <= end_hour else (hour >= start_hour or hour < end_hour)
+            if is_open:
+                return True
+    if not saw_parseable_rule:
+        return None
+    if matched_rule:
+        return False
+    return False if has_day_rule else None
+
+
+def _day_token_matches(token: str, weekday: int) -> bool:
+    endpoints = re.split(r"\s*-\s*", token.strip())
+    if len(endpoints) == 1:
+        return _OPENING_DAYS.get(endpoints[0]) == weekday
+    first, last = _OPENING_DAYS.get(endpoints[0]), _OPENING_DAYS.get(endpoints[1])
+    if first is None or last is None:
+        return False
+    return first <= weekday <= last if first <= last else weekday >= first or weekday <= last
+
+
+def mapped_place_weight(kind: str, opening_hours: str, weights: dict, hour: float | None = None) -> float:
+    base = weights.get(kind, 1)
+    if kind in ("police", "hospital"):
+        return base
+    state = opening_hours_state(opening_hours, hour)
+    if state is True:
+        return WEIGHTS.get(kind, base)
+    if state is False:
+        return 0.0
+    return base
+
+
 def analyze_route(rt: dict, mode: str, points: list, radius: int, tile_data: dict) -> dict:
     out = {"coords": downsample(rt["coords"], 600), "_raw_coords": rt["coords"], "km": round(rt["km"], 1), "secs": int(rt["secs"]),
            "sampled": 0, "isolated": 0, "counts": {"police": 0, "hospital": 0, "other": 0},
-           "key": [], "avg": None, "score": None, "lit": None, "stretch_activity": [], "help_points": []}
+           "key": [], "avg": None, "score": None, "lit": None, "stretch_activity": [], "help_points": [], "empty_points": []}
     n = len(points)
     weights = NIGHT_WEIGHTS if is_night() else WEIGHTS
     if is_night() and metro_closed():   # station entrances are shut, so they bring no people around
@@ -4403,9 +5069,11 @@ def analyze_route(rt: dict, mode: str, points: list, radius: int, tile_data: dic
                 continue  # cheap pre-filter before the exact distance check
             if haversine(sla, slo, plat, plon) > radius:
                 continue
-            near += 1
-            stretch_near += 1
-            s += weights.get(kind, 1)
+            place_weight = mapped_place_weight(kind, opening_hours, weights, getattr(_SCORING_CONTEXT, "hour", None))
+            if place_weight > 0:
+                near += 1
+                stretch_near += 1
+                s += place_weight
             categories = [kind] if kind in ("police", "hospital") else []
             if re.search(r"24\s*/\s*7|24\s*hours|00:00\s*-\s*24:00", opening_hours, re.I):
                 categories.append("24-hour")
@@ -4424,6 +5092,7 @@ def analyze_route(rt: dict, mode: str, points: list, radius: int, tile_data: dic
                 out["counts"]["other"] += 1
         if near == 0:
             isolated += 1
+            out["empty_points"].append({"lat": sla, "lon": slo})
         total += min(s, 8)
         out["stretch_activity"].append({"lat": sla, "lon": slo, "busy": stretch_near > 0})
 
@@ -6659,6 +7328,7 @@ def plan_route():
     p = request.get_json(silent=True) or {}
     origin = str(p.get("origin", "")).strip()[:200]
     destination = str(p.get("destination", "")).strip()[:200]
+    via_name = str(p.get("via", "")).strip()[:200]
     mode = p.get("mode") if p.get("mode") in ("WALKING", "TRANSIT", "BUS") else "DRIVING"
     requested_time = p.get("departure_time") or p.get("time")
     _SCORING_CONTEXT.hour = parse_departure_hour(requested_time)
@@ -6693,6 +7363,7 @@ def plan_route():
             b = {"lat": dlat, "lon": dlon, "display_name": destination}
         else:
             b = geocode(destination)
+        c = geocode(via_name if "delhi" in via_name.lower() else via_name + ", Delhi, India") if via_name else None
     except OutsideArea as exc:
         return jsonify({"error": area_only_text("en", str(exc)), "outside_area": True,
                         "open_sos": True}), 422
@@ -6710,14 +7381,21 @@ def plan_route():
     if not guards.in_delhi(b["lat"], b["lon"]):
         return jsonify({"error": guards.outside_delhi_message(destination), "outside_area": True,
                         "open_sos": True}), 422
+    if c and not guards.in_delhi(c["lat"], c["lon"]):
+        return jsonify({"error": guards.outside_delhi_message(via_name), "outside_area": True,
+                        "open_sos": True}), 422
 
     if mode == "TRANSIT":
+        if c:
+            return jsonify({"error": "A via stop is available for driving and walking routes. Metro + walk via stops are not supported yet."}), 400
         return plan_transit(a, b)
     if mode == "BUS":
+        if c:
+            return jsonify({"error": "A via stop is available for driving and walking routes. Bus via stops are not supported yet."}), 400
         return plan_bus_trip(a, b)
 
     try:
-        raw_routes = fetch_routes(a, b, mode)
+        raw_routes = fetch_routes(a, b, mode, via=c)
     except (requests.RequestException, RuntimeError) as exc:
         app.logger.warning("Route service error (%s): %s", type(exc).__name__, exc)
         return jsonify({"error": "I couldn't get a route right now. Please try again."}), 502
@@ -6731,7 +7409,7 @@ def plan_route():
     night = finalize_scores(routes)
     scored = all(r["score"] is not None for r in routes)
     note = None
-    if scored and max(r["score"] for r in routes) < DETOUR_BELOW:
+    if scored and not c and max(r["score"] for r in routes) < DETOUR_BELOW:
         try:
             extras, why_none = find_safer_detours(a, b, mode, routes)
         except Exception as exc:   # a detour is a bonus: never let it break the normal result
@@ -6784,7 +7462,9 @@ def plan_route():
         r.pop("detour_name", None)
     return jsonify({"routes": routes, "best": best, "scored": scored, "night": night, "data_error": data_error,
                     "start": a, "end": b, "resolved": {"origin": a.get("display_name") or origin,
-                    "destination": b.get("display_name") or destination}, "mode": mode,
+                    "destination": b.get("display_name") or destination,
+                    "via": c.get("display_name") or via_name if c else None},
+                    "via_location": c, "mode": mode,
                     "departure_time": requested_time, "note": note})
 
 
@@ -6830,6 +7510,55 @@ def activity_grid():
                     "properties": {"status": status, "weight": round(value, 1), "source": "cached OpenStreetMap places"}})
     return jsonify({"type": "FeatureCollection", "features": features,
                     "note": "Coarse cached map-place density; not live crowd or crime data."})
+
+
+@app.route("/nearest_help", methods=["POST"])
+def nearest_help():
+    """Return closest mapped police station and hospital near a named Delhi place."""
+    payload = request.get_json(silent=True) or {}
+    place = str(payload.get("place", "")).strip()[:200]
+    if not place:
+        return jsonify({"error": "Enter a place name in Delhi."}), 400
+    coordinate_match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*", place)
+    try:
+        if coordinate_match:
+            center = {"lat": float(coordinate_match.group(1)), "lon": float(coordinate_match.group(2)),
+                      "display_name": "entered coordinates"}
+        else:
+            center = geocode(place if "delhi" in place.lower() else place + ", Delhi, India")
+    except OutsideArea as exc:
+        return jsonify({"error": area_only_text("en", str(exc))}), 422
+    except PlaceNotFound:
+        return jsonify({"error": "I couldn't find that place. Try a more specific Delhi landmark or enter latitude, longitude for offline lookup."}), 404
+    except requests.RequestException:
+        return jsonify({"error": "Could not reach the place-search service. Enter latitude, longitude to use saved map data offline."}), 502
+    if not guards.in_delhi(center["lat"], center["lon"]):
+        return jsonify({"error": guards.outside_delhi_message(place)}), 422
+    tile_lat, tile_lon = tile_of(center["lat"], center["lon"])
+    tiles = {(tile_lat + dy, tile_lon + dx) for dy in range(-1, 2) for dx in range(-1, 2)}
+    saved_tiles = _load_cache().get("tiles", {})
+    tile_data = {tile: (saved_tiles.get(f"{tile[0]}_{tile[1]}") or {}).get("pois")
+                 for tile in tiles if f"{tile[0]}_{tile[1]}" in saved_tiles}
+    candidates = {"police": None, "hospital": None}
+    for pois in tile_data.values():
+        for poi in pois or []:
+            if len(poi) < 5 or poi[3] not in candidates:
+                continue
+            try:
+                distance = haversine(center["lat"], center["lon"], float(poi[1]), float(poi[2]))
+            except (TypeError, ValueError):
+                continue
+            if distance > 10000:
+                continue
+            item = {"name": str(poi[4] or poi[3]), "kind": poi[3], "lat": float(poi[1]),
+                    "lon": float(poi[2]), "distance_km": round(distance / 1000, 1)}
+            if candidates[poi[3]] is None or distance < candidates[poi[3]][0]:
+                candidates[poi[3]] = (distance, item)
+    results = [value[1] for value in candidates.values() if value is not None]
+    results.sort(key=lambda item: item["distance_km"])
+    return jsonify({"place": center.get("display_name") or place,
+                    "center": {"lat": center["lat"], "lon": center["lon"]}, "results": results,
+                    "note": "Straight-line distance to saved OpenStreetMap records; map data may be incomplete and is not live."})
 
 
 @app.route("/audit_compare", methods=["POST"])

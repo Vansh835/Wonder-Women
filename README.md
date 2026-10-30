@@ -5,16 +5,22 @@ Women Safety Shield is a single-file Flask application with desktop and phone-fi
 ## What it can do
 
 - Compare walking, driving, Delhi Metro, and bus route options using public or cached map data.
+- Compare driving, walking, and Metro + walk for one trip, and mark each checked point with no nearby mapped place on the route map.
+- Search saved map data for the closest police station and hospital near a named Delhi place. Coordinates can be searched offline; resolving a place name may need internet access. Coordinates work offline against saved tiles. Distances are straight-line and cache coverage may be incomplete.
+- Plan driving or walking routes through an optional stop C; Metro and bus via stops are not supported yet.
 - Colour sampled route stretches green when mapped places were nearby and red when the sample had no mapped place. These are map-data signals, not live observations of crowds.
 - Show each route's score, travel time, nearby mapped police and hospital points, and the nearest tagged 24-hour place when that information exists. Help points are marked on the map with approximate distance from a checked route point.
-- Compare a route's current score with a midday estimate. After local sunset, the app uses a date-specific offline sunset/sunrise calculation for night weighting; map opening-hour data may still be incomplete.
+- Compare a route's current score with a midday estimate. After local sunset, the app uses a date-specific offline sunset/sunrise calculation; common weekly OpenStreetMap opening-hour schedules adjust place weights when present, while missing or unsupported schedules use the existing estimates.
 - Suggest a nearby cab pickup point by ranking mapped places for nearby activity and distance, then offer a route to it.
 - Prepare an SMS to a saved trusted contact with cab driver and vehicle details plus a map link. The user reviews it and taps Open SMS to send; the app does not send messages itself.
 - Set a check-in timer. On Android, a local notification opens a prepared SMS to the selected contact when the timer expires; the user still reviews and sends it. Desktop/browser reminders work while the app page is open.
+- On a phone, monitor a planned route while the page stays open, prompt after a 200 m deviation, offer an arrival message, and watch for a low battery. SMS messages open for review and still need the user to send them; background monitoring depends on browser and device support.
 - Store multiple trusted contact numbers and home/work place names in device-local storage. Saved places can be added to the route dropdowns.
 - Show a coarse Delhi busy/empty overlay from cached OpenStreetMap places. Areas without cached data are omitted.
 - Switch the interface between English and Hindi. Choose English, Hindi, or Hinglish speech recognition; the Android app falls back to the native speech recognizer when WebView speech input is unavailable.
 - Compare 10 to 100 manually labelled busy/empty audit points with the mapped-place classification and show the agreement percentage and confusion counts.
+- Import and export audit points as CSV, or tap the map to add labelled points stored in browser local storage.
+- Use a flashing sound and vibration alarm, save an emergency card, and review recent trip scores on the device.
 - Find nearby mapped places and offer a route from the user's shared current location to each result.
 - Dictate a chat message with the microphone button in supported browsers; the transcript appears in the input field for review before sending.
 - Provide SOS and emergency numbers, location-sharing tools, a PIN-protected emergency-state reset, and a fake-call feature.
@@ -107,3 +113,10 @@ The suite uses the local Ollama Python package for app imports, but tests should
 ## Local state and privacy
 
 `safety_pin.json` stores a salted password hash, not the PIN itself. It and generated Python bytecode are local runtime artifacts and should not be committed. Map caches and evaluation files remain separate project data; keep or distribute them according to their source and intended use. The earlier split Python modules are retained as reference copies; the one-file build does not need to import them.
+## GPU build for Windows without a virtual environment
+
+Use `safety_shield_gpu.py` for the GPU-offload build. It asks Ollama to place as many model layers on the GPU as available memory allows (`OLLAMA_NUM_GPU=99`). Actual GPU use depends on the Ollama installation, graphics driver, and available VRAM; Ollama can fall back to CPU when needed. The app's Python/Flask code itself does not use the GPU; Ollama performs the model inference.
+
+Run `run_gpu_no_venv.bat` from the extracted project folder. It uses the regular Python 3.10+ installation, offers to install the project's required packages for the current Windows user, checks for Ollama, downloads `qwen3:latest` if needed, then starts the phone-first app. No virtual environment is created. If the other computer has a different GPU or too little VRAM, set `OLLAMA_NUM_GPU` to a smaller value or remove the setting to let Ollama choose automatically.
+
+The Pylance messages in the supplied diagnostics are static type-checker warnings. They are separate from runtime installation problems; creating a second file does not by itself clear those warnings.
