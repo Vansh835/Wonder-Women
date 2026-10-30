@@ -8,7 +8,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="false"
-        android:label="Women Safety Shield"
+        android:label="Saheli AI"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
         <activity

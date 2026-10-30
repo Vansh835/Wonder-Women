@@ -8,7 +8,7 @@ from pathlib import Path
 
 PHONE_APP_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PHONE_APP_DIR.parent
-PYTHON_APP = PROJECT_ROOT / "safety_shield_all_in_one.py"
+PYTHON_APP = PROJECT_ROOT / "saheli_ai.py"
 ASSET_FILE = PHONE_APP_DIR / "app" / "src" / "main" / "assets" / "www" / "index.html"
 
 ANDROID_FETCH_BOOTSTRAP = r"""<script>

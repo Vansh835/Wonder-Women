@@ -192,6 +192,16 @@ public final class MainActivity extends Activity implements SensorEventListener 
 
     private final class CheckInBridge {
         @JavascriptInterface
+        public String getPhoneApiConfig() {
+            try {
+                JSONObject config = new JSONObject();
+                config.put("base", getBaseUrl());
+                config.put("token", getToken());
+                return config.toString();
+            } catch (Exception ignored) { return "{}"; }
+        }
+
+        @JavascriptInterface
         public void setShakeSOS(boolean enabled) {
             preferences.edit().putBoolean("shake_sos", enabled).apply();
             runOnUiThread(() -> { if (enabled) registerShakeSensor(); else unregisterShakeSensor(); });

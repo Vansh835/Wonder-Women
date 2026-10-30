@@ -2,21 +2,12 @@
 setlocal
 cd /d "%~dp0"
 
-where py >nul 2>&1
-if not errorlevel 1 (
-  set "PYRUN=py -3"
-) else (
-  where python >nul 2>&1
-  if errorlevel 1 (
-    echo Python 3.10 or newer was not found. Install Python, then try again.
-    pause
-    exit /b 1
-  )
-  set "PYRUN=python"
+set "PYRUN="
+py -3 --version >nul 2>&1 && set "PYRUN=py -3"
+if not defined PYRUN (
+  python --version >nul 2>&1 && set "PYRUN=python"
 )
-
-%PYRUN% --version >nul 2>&1
-if errorlevel 1 (
+if not defined PYRUN (
   echo Could not start Python. Install Python 3.10 or newer, then try again.
   pause
   exit /b 1
@@ -60,6 +51,6 @@ if errorlevel 1 (
 
 set "OLLAMA_NUM_GPU=99"
 echo Requesting maximum Ollama GPU layer offload. Ollama may use CPU if GPU support is unavailable or memory is insufficient.
-echo Starting the phone-first Safety Shield app...
-%PYRUN% safety_shield_gpu.py --mobile
+echo Starting Saheli AI with the GPU-enabled local model...
+%PYRUN% saheli_ai_gpu.py --mobile
 pause

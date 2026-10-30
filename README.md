@@ -67,13 +67,13 @@ $env:OLLAMA_MODEL = "qwen3:latest"
 Desktop interface:
 
 ```powershell
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py
+.\.venv\Scripts\python.exe saheli_ai.py
 ```
 
 Phone-first interface:
 
 ```powershell
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py --mobile
+.\.venv\Scripts\python.exe saheli_ai.py --mobile
 ```
 
 The desktop interface is served at `/`; the phone-first interface is served at `/mobile`. The app opens in a desktop window when `pywebview` is installed and otherwise opens in a browser. The local web server binds to loopback; it is intended for use on the same computer.
@@ -83,11 +83,11 @@ The desktop interface is served at `/`; the phone-first interface is served at `
 These commands download or import data into local cache files:
 
 ```powershell
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py --download delhi
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py --download-metro
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py --download-lamps delhi
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py --import-osm path\to\map-data.zip
-.\.venv\Scripts\python.exe safety_shield_all_in_one.py --import-bus path\to\gtfs-feed.zip
+.\.venv\Scripts\python.exe saheli_ai.py --download delhi
+.\.venv\Scripts\python.exe saheli_ai.py --download-metro
+.\.venv\Scripts\python.exe saheli_ai.py --download-lamps delhi
+.\.venv\Scripts\python.exe saheli_ai.py --import-osm path\to\map-data.zip
+.\.venv\Scripts\python.exe saheli_ai.py --import-bus path\to\gtfs-feed.zip
 ```
 
 The bus import expects a complete GTFS feed with `routes.txt`, `trips.txt`, `stops.txt`, and `stop_times.txt`. For the optional desktop window and shapefile support, install `requirements-optional.txt`:
@@ -104,7 +104,7 @@ Install development dependencies and run the guard regression suite:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m ruff check safety_shield_all_in_one.py
+.\.venv\Scripts\python.exe -m ruff check saheli_ai.py
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
@@ -115,8 +115,8 @@ The suite uses the local Ollama Python package for app imports, but tests should
 `safety_pin.json` stores a salted password hash, not the PIN itself. It and generated Python bytecode are local runtime artifacts and should not be committed. Map caches and evaluation files remain separate project data; keep or distribute them according to their source and intended use. The earlier split Python modules are retained as reference copies; the one-file build does not need to import them.
 ## GPU build for Windows without a virtual environment
 
-Use `safety_shield_gpu.py` for the GPU-offload build. It asks Ollama to place as many model layers on the GPU as available memory allows (`OLLAMA_NUM_GPU=99`). Actual GPU use depends on the Ollama installation, graphics driver, and available VRAM; Ollama can fall back to CPU when needed. The app's Python/Flask code itself does not use the GPU; Ollama performs the model inference.
+Use `saheli_ai_gpu.py` for the GPU-offload build. It asks Ollama to place as many model layers on the GPU as available memory allows (`OLLAMA_NUM_GPU=99`). Actual GPU use depends on the Ollama installation, graphics driver, and available VRAM; Ollama can fall back to CPU when needed. The app's Python/Flask code itself does not use the GPU; Ollama performs the model inference.
 
-Run `run_gpu_no_venv.bat` from the extracted project folder. It uses the regular Python 3.10+ installation, offers to install the project's required packages for the current Windows user, checks for Ollama, downloads `qwen3:latest` if needed, then starts the phone-first app. No virtual environment is created. If the other computer has a different GPU or too little VRAM, set `OLLAMA_NUM_GPU` to a smaller value or remove the setting to let Ollama choose automatically.
+Run `run_saheli_ai_gpu_no_venv.bat` from the extracted project folder. It uses the regular Python 3.10+ installation, offers to install the project's required packages for the current Windows user, checks for Ollama, downloads `qwen3:latest` if needed, then starts the phone-first app. No virtual environment is created. If the other computer has a different GPU or too little VRAM, set `OLLAMA_NUM_GPU` to a smaller value or remove the setting to let Ollama choose automatically.
 
 The Pylance messages in the supplied diagnostics are static type-checker warnings. They are separate from runtime installation problems; creating a second file does not by itself clear those warnings.

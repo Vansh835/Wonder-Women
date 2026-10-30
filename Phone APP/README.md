@@ -16,7 +16,7 @@ This Android Studio project packages the phone-first interface in the APK. The p
 2. From the project root, run:
 
    ```powershell
-   python .\safety_shield_all_in_one.py --phone-api --browser
+   python .\saheli_ai.py --phone-api --browser
    ```
 
 3. Keep the phone and computer on the same trusted private Wi-Fi. Use the **Computer API address** and **Phone pairing token** printed in the computer console in the APK's **Server** settings.

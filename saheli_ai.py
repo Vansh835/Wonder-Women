@@ -1,7 +1,7 @@
 """Women Safety Shield: single-file desktop and phone-first application.
 
-Run with ``python safety_shield_all_in_one.py`` for desktop or add ``--mobile``
-for the phone-first interface. Map caches and the local PIN state remain external
+Run with ``python saheli_ai.py`` for desktop or add ``--mobile``
+for the phone-first interface. Map caches remain external
 """
 """
 Women Safety Shield - Responsive Assistant (100% free, no API keys, no billing)
@@ -32,7 +32,7 @@ Optional extras (each is a one-time download):
 Needs an internet connection (for map tiles and routing). The AI runs locally.
 These are free community servers: fine for personal use, please don't hammer them.
 For Api amd Address of local assistant use this command:-
-python .\\safety_shield_all_in_one.py --phone-api --browser
+py .\\saheli_ai.py --phone-api --browser
 """
 import csv
 import datetime
@@ -72,8 +72,7 @@ HELPLINES = [
 # the official NCW Anti-Human Trafficking Cell coordinates support for women and girls.
 TRAFFICKING_HELPLINE = None  # TODO: verify an official, current India trafficking helpline.
 
-# PIN, emergency-state, boundary, and action guards.
-import hashlib
+# Emergency-state, boundary, and action guards.
 import hmac
 import json
 import os
@@ -214,35 +213,20 @@ def download_delhi_boundary(timeout=60):
 
 
 # =========================================================================== #
-# C4. Emergency state per chat session + PIN
+# C4. Emergency state per chat session
 # =========================================================================== #
 # Design: the page keeps a random session id. When the app detects an emergency it marks that session as
-# "emergency active". While that is true, chat can NEVER cancel it. Only the PIN can (POST /pin/cancel).
-# The PIN is set in the SOS panel and stored on this computer as a salted PBKDF2 hash in safety_pin.json
-# (never in plain text, never sent anywhere). Five wrong tries lock PIN entry for 5 minutes.
-# If NO PIN was ever set, the emergency state ends by itself after EMERGENCY_TTL seconds, so nobody is locked out.
+# "emergency active". While that is true, chat can NEVER cancel it. It ends when the person presses
+# "End emergency" in the SOS panel (POST /emergency/cancel), or by itself after EMERGENCY_TTL seconds.
 EMERGENCY_TTL = 30 * 60
-PIN_MAX_TRIES = 5
-PIN_LOCK_SECS = 300
-PIN_FILE = os.environ.get("SS_PIN_FILE") or os.path.join(HERE, "safety_pin.json")
 
 _sessions = {}
 _lock = threading.Lock()
-_fail = {"n": 0, "until": 0.0}
 
 
 def clean_sid(raw) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_\-#]", "", str(raw or ""))[:64]
     return cleaned or secrets.token_urlsafe(16)
-
-
-def _read_pin():
-    data = _safe_json(PIN_FILE)
-    return data if isinstance(data, dict) and data.get("salt") and data.get("hash") else None
-
-
-def pin_is_set() -> bool:
-    return _read_pin() is not None
 
 
 def set_emergency(sid: str):
@@ -255,7 +239,7 @@ def emergency_active(sid: str) -> bool:
         s = _sessions.get(sid)
         if not s:
             return False
-        if not pin_is_set() and time.time() - s["since"] > EMERGENCY_TTL:
+        if time.time() - s["since"] > EMERGENCY_TTL:
             _sessions.pop(sid, None)
             return False
         return True
@@ -266,88 +250,35 @@ def clear_emergency(sid: str):
         _sessions.pop(sid, None)
 
 
-def _digest(pin: str, salt: bytes) -> str:
-    return hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, 200_000).hex()
-
-
-def verify_pin(pin: str):
-    """Returns (ok, message)."""
-    cur = _read_pin()
-    if not cur:
-        return False, "No PIN is set yet."
-    now = time.time()
-    if now < _fail["until"]:
-        return False, "Too many wrong tries. Please wait a few minutes."
-    pin = str(pin or "")
-    if re.fullmatch(r"\d{4,8}", pin) and hmac.compare_digest(_digest(pin, bytes.fromhex(cur["salt"])), cur["hash"]):
-        _fail.update(n=0, until=0.0)
-        return True, "OK"
-    _fail["n"] += 1
-    if _fail["n"] >= PIN_MAX_TRIES:
-        _fail.update(n=0, until=now + PIN_LOCK_SECS)
-        return False, "Wrong PIN. Too many tries, so PIN entry is locked for a few minutes."
-    return False, "Wrong PIN."
-
-
-def set_pin(pin: str, old_pin: str = ""):
-    """Set or change the PIN. Changing needs the current PIN. Returns (ok, message)."""
-    pin = str(pin or "")
-    if not re.fullmatch(r"\d{4,8}", pin):
-        return False, "The PIN must be 4 to 8 digits."
-    if pin_is_set():
-        ok, msg = verify_pin(old_pin)
-        if not ok:
-            return False, "To change the PIN, enter your current PIN first. " + msg
-    salt = secrets.token_bytes(16)
-    tmp = PIN_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"salt": salt.hex(), "hash": _digest(pin, salt)}, f)
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp, PIN_FILE)
-    return True, "PIN saved on this computer."
-
-
 # --- what the chat says ---------------------------------------------------- #
-_PIN_REQUIRED = {
+_CANCEL_BLOCKED = {
     "en": ("An emergency is active, so I can't cancel, hide or switch off anything from chat, and I can't confirm "
-           "that you are fine. The alert stays on. To cancel it, enter your PIN in the SOS panel. "
+           "that you are fine. The alert stays on. To end it, press the End emergency button in the SOS panel. "
            "If you are in danger, call 112 now."),
     "hinglish": ("Emergency chalu hai, isliye main chat se kuch bhi cancel, hide ya band nahi kar sakta, aur yeh bhi "
-                 "confirm nahi kar sakta ki aap theek hain. Alert chalu rahega. Cancel karne ke liye SOS panel mein "
-                 "apna PIN daalein. Agar khatra hai to abhi 112 par call karein."),
+                 "confirm nahi kar sakta ki aap theek hain. Alert chalu rahega. Ise band karne ke liye SOS panel mein "
+                 "End emergency button dabayein. Agar khatra hai to abhi 112 par call karein."),
     "hi": ("इमरजेंसी चालू है, इसलिए मैं चैट से कुछ भी रद्द, छिपा या बंद नहीं कर सकता, और यह भी पक्का नहीं कर सकता कि आप "
-           "ठीक हैं। अलर्ट चालू रहेगा। रद्द करने के लिए SOS पैनल में अपना PIN डालें। अगर आप ख़तरे में हैं तो अभी 112 "
-           "पर कॉल करें।"),
-}
-_NO_PIN_EXTRA = {
-    "en": " No PIN is set yet: you can set one in the SOS panel. Otherwise the emergency state ends by itself after 30 minutes.",
-    "hinglish": " Abhi PIN set nahi hai: SOS panel mein set kar sakte hain. Nahi to emergency 30 minute baad apne aap khatam ho jayegi.",
-    "hi": " अभी PIN सेट नहीं है: SOS पैनल में सेट कर सकते हैं। नहीं तो इमरजेंसी 30 मिनट बाद अपने आप ख़त्म हो जाएगी।",
+           "ठीक हैं। अलर्ट चालू रहेगा। इसे बंद करने के लिए SOS पैनल में 'आपातकाल समाप्त करें' बटन दबाएँ। अगर आप ख़तरे में हैं "
+           "तो अभी 112 पर कॉल करें।"),
 }
 _SETTINGS_REFUSAL = {
-    "en": ("I can't change settings, alerts or saved contacts from chat, and I can't switch anything off without your "
-           "PIN. Use the SOS panel for that. If you feel unsafe, call 112."),
-    "hinglish": ("Main chat se settings, alerts ya saved contacts nahi badal sakta, aur PIN ke bina kuch band nahi kar "
+    "en": ("I can't change settings, alerts or saved contacts from chat, and I can't switch anything off from here. "
+           "Use the SOS panel for that. If you feel unsafe, call 112."),
+    "hinglish": ("Main chat se settings, alerts ya saved contacts nahi badal sakta, aur yahan se kuch band nahi kar "
                  "sakta. Iske liye SOS panel use karein. Khatra lage to 112 par call karein."),
-    "hi": ("मैं चैट से सेटिंग, अलर्ट या सेव किए संपर्क नहीं बदल सकता, और PIN के बिना कुछ बंद नहीं कर सकता। इसके लिए SOS "
+    "hi": ("मैं चैट से सेटिंग, अलर्ट या सेव किए संपर्क नहीं बदल सकता, और यहाँ से कुछ बंद नहीं कर सकता। इसके लिए SOS "
            "पैनल इस्तेमाल करें। ख़तरा लगे तो 112 पर कॉल करें।"),
 }
 
 
-def pin_required_reply(lang: str) -> dict:
-    text = _PIN_REQUIRED.get(lang, _PIN_REQUIRED["en"])
-    has_pin = pin_is_set()
-    if not has_pin:
-        text += _NO_PIN_EXTRA.get(lang, _NO_PIN_EXTRA["en"])
-    return {"emergency": True, "pin_required": True, "pin_set": has_pin, "has_route": False,
-            "source": "rule", "refused": "cancel_needs_pin", "ai_response": text}
+def cancel_blocked_reply(lang: str) -> dict:
+    return {"emergency": True, "has_route": False, "source": "rule", "refused": "cancel_from_chat",
+            "ai_response": _CANCEL_BLOCKED.get(lang, _CANCEL_BLOCKED["en"])}
 
 
 def settings_refusal(lang: str) -> dict:
-    return {"has_route": False, "open_sos": True, "source": "rule", "refused": "settings_need_pin",
+    return {"has_route": False, "open_sos": True, "source": "rule", "refused": "settings_from_chat",
             "ai_response": _SETTINGS_REFUSAL.get(lang, _SETTINGS_REFUSAL["en"])}
 
 
@@ -367,7 +298,7 @@ CANCEL_INTENT = re.compile(
 # Changing settings at any time (also when no emergency is active).
 SETTINGS_INTENT = re.compile(
     r"\b(?:turn\s+off|switch\s+off|disable|delete|remove|change|reset|clear|deactivate)\b.{0,25}"
-    r"\b(?:alerts?|sos|contacts?|settings?|pin|notifications?|location\s+sharing)\b",
+    r"\b(?:alerts?|sos|contacts?|settings?|notifications?|location\s+sharing)\b",
     re.IGNORECASE,
 )
 
@@ -400,36 +331,6 @@ CHAT_LOCATION_INTENT = re.compile(
     r"|सबसे\s*(?:नज़दीक|नजदीक|पास)|आसपास|मेरे\s*पास|मेरी\s*(?:लोकेशन|जगह)|मैं\s*कहाँ\s*हूँ|सुरक्षित\s*जगह",
     re.IGNORECASE,
 )
-PRIVACY_INTENT = re.compile(
-    r"\b(?:is my data private|is my location private|do you store my (?:location|data|trip|contacts?)|"
-    r"do you save my (?:location|data|trip|contacts?)|what data (?:do you|does this app) use|"
-    r"do you share my (?:location|data|trip)|where (?:is|are) my (?:data|location|trips?|contacts?) stored|"
-    r"what happens to my location|privacy policy)\b|"
-    r"मेरा डेटा निजी है|मेरी लोकेशन (?:सहेज|स्टोर)|मेरी जानकारी (?:सहेज|स्टोर)|क्या आप मेरी लोकेशन रखते",
-    re.IGNORECASE,
-)
-
-
-def privacy_reply(lang: str) -> str:
-    """Describe app storage and network behavior without promising third-party retention."""
-    answers = {
-        "en": ("Some app data is saved on this device: trusted contacts, saved places, settings, and trip history. "
-               "Nearby and route requests send your location or place names to this app's server; route lookup may also "
-               "use public geocoding or routing services. I can't verify what those external services retain. Avoid "
-               "entering information you don't want processed. Clearing this app's site data removes locally saved items."),
-        "hinglish": ("Kuch app data isi device par save hota hai: trusted contacts, saved places, settings aur trip history. "
-                     "Nearby ya route request mein aapki location ya place names app ke server ko bheje jaate hain; route "
-                     "lookup ke liye public map services bhi use ho sakti hain. Main un services ki data retention verify "
-                     "nahi kar sakta. Jo jaankari process nahi karwana chahte, use share na karein. App ka site data clear "
-                     "karne se device par saved items delete ho jaate hain."),
-        "hi": ("कुछ ऐप डेटा इसी डिवाइस पर सेव होता है: भरोसेमंद संपर्क, सेव की गई जगहें, सेटिंग और यात्रा इतिहास। "
-              "आसपास की जगह या रास्ता खोजने पर आपकी लोकेशन या जगहों के नाम ऐप के सर्वर को भेजे जाते हैं; रास्ते की खोज "
-              "में सार्वजनिक मैप सेवाएँ भी इस्तेमाल हो सकती हैं। उन सेवाओं की डेटा रिटेंशन मैं सत्यापित नहीं कर सकता। "
-              "जो जानकारी प्रोसेस नहीं करवाना चाहते, उसे साझा न करें। ऐप का साइट डेटा हटाने से डिवाइस पर सेव की गई चीज़ें मिट जाती हैं।"),
-    }
-    return answers.get(lang, answers["en"])
-
-
 _CAPABILITY = {
     "checkin": {
         "en": ("I can't set check-ins or timers, and I can't send alerts to your contacts from this chat. Here is what "
@@ -510,31 +411,24 @@ def sanitize_actions(text: str, lang: str = "en"):
 
 
 # =========================================================================== #
-# Flask routes for the PIN (called by the SOS panel)
+# Flask routes for the emergency state (called by the SOS panel)
 # =========================================================================== #
 def register_routes(app):
     from flask import jsonify, request
 
+    @app.route("/emergency/cancel", methods=["POST"])
+    def emergency_cancel_route():
+        p = request.get_json(silent=True) or {}
+        clear_emergency(clean_sid(p.get("session_id")))
+        return jsonify({"ok": True, "message": "Emergency ended."})
+
+    # "/pin/status" is only an old name kept so the Android app's connection check keeps working.
+    # Delete that second decorator once the Android app calls /status instead.
+    @app.route("/status")
     @app.route("/pin/status")
-    def pin_status():
+    def status_route():
         sid = clean_sid(request.args.get("session_id"))
-        return jsonify({"pin_set": pin_is_set(), "emergency": emergency_active(sid)})
-
-    @app.route("/pin/set", methods=["POST"])
-    def pin_set_route():
-        p = request.get_json(silent=True) or {}
-        ok, msg = set_pin(p.get("pin"), p.get("old_pin"))
-        return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
-
-    @app.route("/pin/cancel", methods=["POST"])
-    def pin_cancel_route():
-        p = request.get_json(silent=True) or {}
-        sid = clean_sid(p.get("session_id"))
-        ok, msg = verify_pin(p.get("pin"))
-        if ok:
-            clear_emergency(sid)
-            return jsonify({"ok": True, "message": "Emergency cancelled with your PIN."})
-        return jsonify({"ok": False, "message": msg}), 403
+        return jsonify({"ok": True, "emergency": emergency_active(sid)})
 
 guards = sys.modules[__name__]
 
@@ -814,19 +708,18 @@ COMMON_DELHI_PLACES = [
 DISTRESS_PATTERN = re.compile(
     r"(?:\bi(?: am|'m|m) being followed\b|\bsome(?:one|body|1)(?: is|'s)? following me\b|"
     r"\bi(?: am|'m|m) being (?:stalked|harassed|assaulted|attacked|molested)\b|"
-    r"\b(?:someone|a man|he|she|they) (?:is|are) (?:stalking|harassing|attacking) me\b|"
-    r"\b(?:someone|he|she|they) (?:assaulted|attacked|molested) me\b|\bi was attacked\b|"
+    r"\b(?:someone|he|she|they) (?:is|are) (?:stalking|harassing|attacking) me\b|"
+    r"\b(?:someone|he|she|they) (?:assaulted|attacked|molested) me\b|"
     r"\b(?:i was grabbed|someone grabbed me|someone grabbed my arm)\b.{0,50}\b(?:hiding|shop|safe)\b|"
     r"\bi(?: am|'m|m) (?:in danger|scared|unsafe)\b|\bi feel unsafe\b|\bi don't feel safe\b|"
     r"\b(?:please help(?: me)? now|i need help now|help me now)\b|"
-    r"^\s*(?:sos|help(?: me)?(?: please)?|please help(?: me)?|i need help(?: me)?(?: please)?|"
-    r"madad karo|meri madad karo|madad chahiye|mujhe bachao|khatre mein hoon|bachao)\W*$|"
-    r"\b(?:this is an emergency|there is an emergency|emergency help now|i need emergency help)\b|"
+    r"^\s*(?:sos|help(?: me)?|bachao)\W*$|"
+    r"\b(?:this is an emergency|emergency help now|i need emergency help)\b|"
     r"\balguien me est[aá] siguiendo\b.{0,50}\b(?:miedo|asustad[oa])\b|"
     r"\bquelqu['’]un me suit\b.{0,50}\b(?:peur|effray[ée])\b|"
     r"\b(?:ek ajnabi|koi)\b.{0,35}\b(?:meri|hamari) gaadi ke peeche aa raha\b|"
     # Only explicit first-person or immediate danger language triggers the emergency panel.
-    r"\b(?:koi (?:mera )?peecha kar raha hai|mera peecha kiya ja raha hai|mujhe khatra hai|"
+    r"\b(?:koi mera peecha kar raha hai|mera peecha kiya ja raha hai|mujhe khatra hai|"
     r"main khatre (?:mein|me) hoon|mujhe dar lag raha|mere saath chhed ?chhad ho rahi)\b|"
     r"\u092e\u0941\u091d\u0947 \u0916\u0924\u0930\u093e \u0939\u0948|"
     r"\u092e\u0948\u0902 \u0916\u0924\u0930\u0947 \u092e\u0947\u0902 \u0939\u0942\u0901|"
@@ -930,7 +823,7 @@ TOPIC_RULES = [
      "For workplace sexual harassment in India, the POSH Act provides for an Internal Committee (often called the Internal Complaints Committee or ICC) at covered workplaces. Keep dated records of incidents and messages, and consider contacting 181 or a trusted adviser. Seek current local guidance about the process."),
     (re.compile(r"\bboyfriend\b.{0,50}\b(?:dangerous|abusive)\b|\b(?:dangerous|abusive)\b.{0,40}\bboyfriend\b", re.I),
      "I can't judge your boyfriend from outside. Warning signs can include threats, intimidation, monitoring, isolation, or controlling your choices. For support, contact 181 or someone you trust; call 112 if danger is immediate."),
-    (re.compile(r"\b(?:attacked|assaulted|sexual assault|was raped|i was raped|molested)\b", re.I),
+    (re.compile(r"\b(?:assaulted|sexual assault|was raped|i was raped|molested)\b", re.I),
      "I'm sorry this happened. You deserve support, and it wasn't your fault. You can choose whether to seek medical care, talk with someone you trust, or consider reporting; there is no pressure to report. 181 can help you find support."),
     (re.compile(r"\bshould i report\b.{0,60}\b(?:police|scared|believe me|believe us)\b|\bscared (?:that )?(?:nobody|no one) will believe me\b", re.I),
      "It is understandable to worry about being believed. There is no pressure to report; you can decide what feels right. If safe, keep any messages or notes about what happened, and consider talking with someone you trust or Women Helpline 181 to explore your options."),
@@ -949,7 +842,7 @@ TOPIC_RULES = [
     (re.compile(r"\b(?:am i safe now|is this area safe|is this route 100% safe)\b", re.I),
      "I can't confirm safety from here. What is happening around you now? If you feel in immediate danger, press SOS or call 112."),
     (re.compile(r"\b(?:hide this app|disguise this app|alerts? to strangers|random users nearby|share my current route with everyone)\b", re.I),
-     "I can't send alerts to strangers or hide this app. I can't change settings without your PIN. Use the SOS panel to contact someone you trust, or call 112 if you are in immediate danger."),
+     "I can't send alerts to strangers or hide this app. I can't change settings from chat. Use the SOS panel to contact someone you trust, or call 112 if you are in immediate danger."),
     (re.compile(r"\b(?:share|give|tell|show)\b.{0,35}\b(?:another person's|someone else's|user named|my wife's|his|her)\b.{0,35}\b(?:location|details|contacts?|address|route)\b", re.I),
      "I can't share another person's location or details. Only that person can choose to share them from their own device."),
     (re.compile(r"\b(?:kill|stop|end)\b.{0,25}\b(?:python|python.exe)\b.{0,30}\b(?:process|stuck|running)\b|\b(?:python|python.exe)\b.{0,30}\b(?:process|stuck)\b", re.I),
@@ -1102,7 +995,7 @@ HTML_TEMPLATE = r"""
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#10191d">
-<title>Women Safety Shield</title>
+<title>Saheli AI</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -1293,7 +1186,7 @@ HTML_TEMPLATE = r"""
 </style>
 </head>
 <body>
-<div id="welcomeScreen" role="dialog" aria-label="Welcome to Safety Shield AI" aria-modal="true">
+<div id="welcomeScreen" role="dialog" aria-label="Welcome to Saheli AI" aria-modal="true">
     <div class="welcome-mark" aria-hidden="true">&#x1F6E1;&#xFE0F;</div>
     <h1 class="welcome-title">Safety Shield <span>AI</span></h1>
     <p class="welcome-subtitle">A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.</p>
@@ -1310,7 +1203,7 @@ HTML_TEMPLATE = r"""
 <div class="panel" id="leftPanel">
     <div class="chat-header">
         <span>&#x1F6E1;&#xFE0F;</span>
-        <h2>Safety Shield AI</h2>
+        <h2>Saheli AI</h2>
         <select id="uiLanguageQuick" aria-label="Screen language" onchange="setUiLanguage(this.value)"><option value="en">EN</option><option value="hi">हिंदी</option></select>
         <div class="theme-picker" id="themePicker" title="Change app color"></div>
         <button class="fake-btn" onclick="openFake()">&#x1F4DE; Fake Call</button>
@@ -1359,11 +1252,9 @@ HTML_TEMPLATE = r"""
         <div class="row"><button type="button" class="sos-btn" onclick="toggleLoudAlarm()">&#x1F6A8; Sound loud alarm</button></div>
         <h4>Emergency controls</h4>
         <div class="row">
-            <button onclick="setSafetyPin()">Set or change PIN</button>
-            <button onclick="cancelEmergencyWithPin()">Cancel emergency with PIN</button>
+            <button onclick="endEmergency()">End emergency (I'm safe)</button>
         </div>
-        <label class="small"><input id="silentPinConfirm" type="checkbox"> Keep PIN result confirmation quiet</label>
-        <p class="small">Chat cannot cancel an active alert. A PIN is stored on this computer as a salted hash.</p>
+        <p class="small">Chat cannot cancel an active alert. It also ends by itself after 30 minutes.</p>
 
         <h4>Share my location</h4>
         <div class="row">
@@ -1491,7 +1382,7 @@ let map = null;
 let auditMapCapture = false;
 let routeLines = [], mapMarkers = [], placeMarkers = [], lastDetail = -1, chatHistory = [], routeActivityLegend = null;
 let speechRecognition = null, checkInTimerHandle = null, nativeVoiceActive = false;
-let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null, selectedRouteIndex = 0;
+let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null, selectedRouteIndex = 0, routeRequestSerial = 0;
 
 /* ---------- small helpers (all text via textContent => no XSS) ---------- */
 function el(tag, cls, text) {
@@ -1822,6 +1713,7 @@ function clearMap() {
 /* ---------- route flow (routing + scoring happen in Python) ---------- */
 async function planRoute(origin, destination, mode, departureTime, originCoords, destinationCoords, viaPlace) {
     if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
+    const requestSerial = ++routeRequestSerial;
     clearMap();
     const status = addMsg('ai', 'Checking the places and route from ' + origin + ' to ' + destination + '.');
     let data;
@@ -1834,17 +1726,18 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
     } catch (e) {
+        if (requestSerial !== routeRequestSerial) return;
         status.textContent = e.message || 'Route lookup failed.';
         status.classList.add('alert-msg');
         if (data && data.open_sos) toggleSOS(true);
         return;
     }
+    if (requestSerial !== routeRequestSerial) return;
 
     currentRoutes = data.routes;
     saveTripHistory(data, origin, destination, mode);
-    const resolved = data.resolved || {};
-    const resolvedSummary = 'Resolved places: ' + (resolved.origin || origin) + (resolved.via ? ' via ' + resolved.via : '')
-        + ' → ' + (resolved.destination || destination) + '.\n';
+    const resolvedSummary = 'Resolved places: ' + data.resolved.origin + (data.resolved.via ? ' via ' + data.resolved.via : '')
+        + ' → ' + data.resolved.destination + '.\n';
     lastTrip = { a: data.start, b: data.end, via: data.via_location || null, mode };
     drawRoutes(data);
     setMobileView('map');
@@ -2233,7 +2126,7 @@ async function sendChatMessage() {
     let location = null;
     try {
         if (needsLocationForChat(text)) {
-            thinking.textContent = 'Your coordinates will be sent to this app to look up nearby mapped places...';
+            thinking.textContent = 'Requesting your location for this nearby question. It is used for this request only...';
             try {
                 const position = await requestChatLocation();
                 location = { lat: position.coords.latitude, lon: position.coords.longitude };
@@ -2320,20 +2213,14 @@ function toggleSOS(show) {
         refreshSOS();
     }
 }
-async function setSafetyPin() {
-    const pin = window.prompt('Choose a 4 to 8 digit PIN. It is stored locally as a salted hash.');
-    if (pin === null) return;
-    const old_pin = window.prompt('If changing an existing PIN, enter the current PIN. Leave blank for first setup.') || '';
-    const r = await fetch('/pin/set', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin, old_pin})});
-    const d = await r.json(); window.alert(d.message || 'PIN update failed.');
-}
-async function cancelEmergencyWithPin() {
-    const pin = window.prompt('Enter your PIN to end this emergency state. Cancel quietly if you need to.');
-    if (pin === null) return;
-    const r = await fetch('/pin/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin, session_id:SESSION_ID})});
-    const d = await r.json();
-    if (!document.getElementById('silentPinConfirm').checked) window.alert(d.message || 'Could not cancel.');
-    if (d.ok) toggleSOS(false);
+async function endEmergency() {
+    if (!window.confirm('End the emergency state? Only do this if you are safe.')) return;
+    try {
+        const r = await fetch('/emergency/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:SESSION_ID})});
+        const d = await r.json();
+        window.alert(d.message || 'Could not end the emergency.');
+        if (d.ok) toggleSOS(false);
+    } catch (_) { window.alert('Could not reach the app to end the emergency.'); }
 }
 function getLocation() {
     const s = document.getElementById('locStatus');
@@ -2502,7 +2389,7 @@ function setUiLanguage(language) {
     try { localStorage.setItem('ui_language', selected); } catch (e) {}
     document.documentElement.lang = selected === 'hi' ? 'hi' : 'en';
     const text = selected === 'hi' ? {
-        'Safety Shield AI': 'सेफ़्टी शील्ड एआई', 'Quick Safest Route': 'सबसे बेहतर रास्ता', 'Quick route': 'त्वरित रास्ता',
+        'Saheli AI': 'सहेली एआई', 'Quick Safest Route': 'सबसे बेहतर रास्ता', 'Quick route': 'त्वरित रास्ता',
         'Find Route': 'रास्ता खोजें', 'Route from my current location': 'मेरी मौजूदा लोकेशन से रास्ता',
         'Send': 'भेजें', 'Fake Call': 'नकली कॉल', 'Emergency': 'आपातकाल', 'Trusted contact': 'भरोसेमंद संपर्क',
         'Check-in timer': 'चेक-इन टाइमर', 'Start timer': 'टाइमर शुरू करें', "I'm home": 'मैं घर पहुँच गई',
@@ -2524,8 +2411,8 @@ function setUiLanguage(language) {
         'Check-in timer': 'चेक-इन टाइमर', 'Home': 'घर', 'Work': 'काम',
         'Driving': 'कार', 'Walking': 'पैदल', 'Metro + walk': 'मेट्रो + पैदल', 'Bus + walk': 'बस + पैदल',
         'Busy / empty areas': 'व्यस्त / खाली क्षेत्र', 'Emergency controls': 'आपातकालीन नियंत्रण',
-        'Share my location': 'मेरी लोकेशन साझा करें', 'Set or change PIN': 'PIN बनाएँ या बदलें',
-        'Cancel emergency with PIN': 'PIN से आपातकाल रद्द करें', 'Copy trip link': 'यात्रा लिंक कॉपी करें',
+        'Share my location': 'मेरी लोकेशन साझा करें', 'End emergency (I\'m safe)': 'आपातकाल समाप्त करें (मैं सुरक्षित हूँ)',
+        'Copy trip link': 'यात्रा लिंक कॉपी करें',
         'How is this scored?': 'यह स्कोर कैसे बना?'
     } : {};
     document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child,.welcome-chip,.welcome-subtitle,.welcome-footnote,label,.small,.btnlink,p,.emergency-call span span').forEach(node => {
@@ -2758,7 +2645,7 @@ MOBILE_HTML_TEMPLATE = r"""
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#10191d">
-<title>Women Safety Shield</title>
+<title>Saheli AI</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -3000,7 +2887,7 @@ MOBILE_HTML_TEMPLATE = r"""
 </style>
 </head>
 <body>
-<div id="welcomeScreen" role="dialog" aria-label="Welcome to Safety Shield AI" aria-modal="true">
+<div id="welcomeScreen" role="dialog" aria-label="Welcome to Saheli AI" aria-modal="true">
     <div class="welcome-mark" aria-hidden="true">&#x1F6E1;&#xFE0F;</div>
     <h1 class="welcome-title">Safety Shield <span>AI</span></h1>
     <p class="welcome-subtitle">A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.</p>
@@ -3017,7 +2904,7 @@ MOBILE_HTML_TEMPLATE = r"""
 <div class="panel" id="leftPanel">
     <div class="chat-header">
         <span>&#x1F6E1;&#xFE0F;</span>
-        <h2>Safety Shield AI</h2>
+        <h2>Saheli AI</h2>
         <select id="uiLanguageQuick" aria-label="Screen language" onchange="setUiLanguage(this.value)"><option value="en">EN</option><option value="hi">हिंदी</option></select>
         <div class="theme-picker" id="themePicker" title="Change app color"></div>
         <button class="fake-btn" onclick="openFake()">&#x1F4DE; Fake Call</button>
@@ -3065,6 +2952,10 @@ MOBILE_HTML_TEMPLATE = r"""
         <p class="small">If you are in immediate danger, move toward other people and call emergency services now.</p>
         <a class="emergency-call" href="tel:112"><span><strong>Call emergency services</strong><span>Immediate help in India</span></span><b>112</b></a>
         <div id="helplines"></div>
+
+        <h4>Emergency controls</h4>
+        <div class="row"><button onclick="endEmergency()">End emergency (I'm safe)</button></div>
+        <p class="small">Chat cannot cancel an active alert. It also ends by itself after 30 minutes.</p>
 
         <h4>Share my location</h4>
         <div class="row">
@@ -3186,6 +3077,7 @@ function enterSafetyShield() {
 }
 const HELPLINES = __HELPLINES__;
 const COMMON_PLACES = __COMMON_PLACES__;
+const SESSION_ID = (() => { try { let v = sessionStorage.getItem('ss_session_id'); if (!v) { v = crypto.randomUUID(); sessionStorage.setItem('ss_session_id', v); } return v; } catch (_) { return 'browser-session'; } })();
 
     const THEMES = [
     { id: 'pink',   name: 'Pink',   accent: '#ff4081', hover: '#f50057' },
@@ -3200,7 +3092,7 @@ let map = null;
 let auditMapCapture = false;
 let routeLines = [], mapMarkers = [], placeMarkers = [], lastDetail = -1, chatHistory = [], routeActivityLegend = null;
 let speechRecognition = null, checkInTimerHandle = null, nativeVoiceActive = false;
-let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null, selectedRouteIndex = 0;
+let currentRoutes = [], lastTrip = null, lastPos = null, activityOverlay = null, selectedRouteIndex = 0, routeRequestSerial = 0;
 
 /* ---------- small helpers (all text via textContent => no XSS) ---------- */
 function el(tag, cls, text) {
@@ -3533,6 +3425,7 @@ function clearMap() {
 /* ---------- route flow (routing + scoring happen in Python) ---------- */
 async function planRoute(origin, destination, mode, departureTime, originCoords, destinationCoords, viaPlace) {
     if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
+    const requestSerial = ++routeRequestSerial;
     clearMap();
     const status = addMsg('ai', 'Finding routes and checking places along each one. The first trip in a new area can take up to a minute; later trips there are much faster...');
     let data;
@@ -3545,10 +3438,12 @@ async function planRoute(origin, destination, mode, departureTime, originCoords,
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
     } catch (e) {
+        if (requestSerial !== routeRequestSerial) return;
         status.textContent = e.message || 'Route lookup failed.';
         status.classList.add('alert-msg');
         return;
     }
+    if (requestSerial !== routeRequestSerial) return;
 
     currentRoutes = data.routes;
     saveTripHistory(data, origin, destination, mode);
@@ -3954,7 +3849,7 @@ async function sendChatMessage() {
     let location = null;
     try {
         if (needsLocationForChat(text)) {
-            thinking.textContent = 'Your coordinates will be sent to this app to look up nearby mapped places...';
+            thinking.textContent = 'Requesting your location for this nearby question. It is used for this request only...';
             try {
                 const position = await requestChatLocation();
                 location = { lat: position.coords.latitude, lon: position.coords.longitude };
@@ -4015,6 +3910,15 @@ function refreshSOS() {
     document.getElementById('sosMsg').value = buildSOSText();
     const num = (document.getElementById('contactInput').value || '').trim();
     document.getElementById('smsLink').href = 'sms:' + num + '?body=' + encodeURIComponent(buildSOSText());
+}
+async function endEmergency() {
+    if (!window.confirm('End the emergency state? Only do this if you are safe.')) return;
+    try {
+        const r = await fetch('/emergency/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session_id:SESSION_ID})});
+        const d = await r.json();
+        window.alert(d.message || 'Could not end the emergency.');
+        if (d.ok) toggleSOS(false);
+    } catch (_) { window.alert('Could not reach the app to end the emergency.'); }
 }
 function toggleSOS(show) {
     document.getElementById('sosPanel').style.display = show ? 'block' : 'none';
@@ -4199,7 +4103,7 @@ function setUiLanguage(language) {
     try { localStorage.setItem('ui_language', selected); } catch (e) {}
     document.documentElement.lang = selected === 'hi' ? 'hi' : 'en';
     const text = selected === 'hi' ? {
-        'Safety Shield AI': 'सेफ़्टी शील्ड एआई', 'Quick route': 'त्वरित रास्ता', 'Route options': 'रास्ते के विकल्प',
+        'Saheli AI': 'सहेली एआई', 'Quick route': 'त्वरित रास्ता', 'Route options': 'रास्ते के विकल्प',
         'Find Route': 'रास्ता खोजें', 'Route from my current location': 'मेरी मौजूदा लोकेशन से रास्ता',
         'Send': 'भेजें', 'Fake Call': 'नकली कॉल', 'Safety tools': 'सुरक्षा के साधन', 'Trusted contact': 'भरोसेमंद संपर्क',
         'Check-in timer': 'चेक-इन टाइमर', 'Start timer': 'टाइमर शुरू करें', "I'm home": 'मैं घर पहुँच गई',
@@ -4214,7 +4118,7 @@ function setUiLanguage(language) {
         'Choose how many minutes until you expect to be home.': 'घर पहुँचने का अनुमानित समय मिनटों में चुनें।',
         'Driving': 'कार', 'Walking': 'पैदल', 'Metro + walk': 'मेट्रो + पैदल', 'Bus + walk': 'बस + पैदल',
         'Busy / empty areas': 'व्यस्त / खाली क्षेत्र', 'Emergency controls': 'आपातकालीन नियंत्रण',
-        'Set or change PIN': 'PIN बनाएँ या बदलें', 'Cancel emergency with PIN': 'PIN से आपातकाल रद्द करें',
+        'End emergency (I\'m safe)': 'आपातकाल समाप्त करें (मैं सुरक्षित हूँ)',
         'Copy trip link': 'यात्रा लिंक कॉपी करें', 'How is this scored?': 'यह स्कोर कैसे बना?'
     } : {};
     document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child,.welcome-chip,.welcome-subtitle,.welcome-footnote,label,.small,.btnlink,p,.emergency-call span span').forEach(node => {
@@ -4450,8 +4354,6 @@ SPELLING_GROUPS = [
     ("bhawan", "bhavan"), ("chowk", "chauk", "chouk"), ("gurudwara", "gurdwara", "gurudwar"),
     ("uprashtrapati", "upa rashtrapati"), ("kanjhawla", "kanjhawala", "kanjhavla", "kanjhwala"),
     ("mandir", "mandar"), ("vihar", "bihar"), ("shahdara", "shahadra"), ("lajpat", "lajpath"),
-    ("nangloi", "nagloi"), ("rohini", "rohni"), ("rajiv", "rajeev"),
-    ("connaught", "conaught"), ("place", "plce"),
 ]
 
 
@@ -4565,28 +4467,6 @@ def _strip_station_words(place: str) -> str:
     return re.sub(r"\s+", " ", _STATION_WORDS.sub(" ", head)).strip()
 
 
-def _offline_area_lookup(place: str) -> dict | None:
-    """Use a name-matched saved Metro station as a generic Delhi fallback."""
-    locality = place.split(",", 1)[0].strip()
-    wanted = re.sub(r"\b(?:metro|station|delhi|india)\b", " ", locality.casefold())
-    wanted = re.sub(r"\s+", " ", wanted).strip()
-    if not wanted:
-        return None
-    stations = _cached_metro_stations()
-    exact = [s for s in stations if _clean_name(s.get("name", "")).casefold() == wanted]
-    matches = exact or [s for s in stations
-                        if wanted in _clean_name(s.get("name", "")).casefold()
-                        or _clean_name(s.get("name", "")).casefold() in wanted]
-    if not matches:
-        return None
-    pick = min(matches, key=lambda s: abs(len(_clean_name(s.get("name", ""))) - len(wanted)))
-    lat, lon = float(pick["lat"]), float(pick["lon"])
-    if not guards.in_delhi(lat, lon):
-        return None
-    return {"lat": lat, "lon": lon,
-            "display_name": f"{locality} (approximate; matched saved station: {pick['name']})",
-            "in_area": True, "approximate": True}
-
 def metro_station_lookup(place: str):
     """If the person typed a metro station ('... metro station'), find it in our own station list.
     Instant, works offline, and avoids the place-search service not knowing 'Metro Station' wording."""
@@ -4608,19 +4488,34 @@ def metro_station_lookup(place: str):
     return {"lat": float(pick["lat"]), "lon": float(pick["lon"])}
 
 
+def saved_place_lookup(place: str):
+    """Resolve a named saved station or named mapped POI without hand-written locality lists."""
+    wanted = re.sub(r"\b(?:metro|station|delhi|india)\b", " ", place.split(",", 1)[0].casefold())
+    wanted = re.sub(r"\s+", " ", wanted).strip()
+    if not wanted:
+        return None
+    candidates = [(s.get("name", ""), float(s["lat"]), float(s["lon"])) for s in _cached_metro_stations()]
+    for tile in _load_cache().get("tiles", {}).values():
+        candidates.extend((str(poi[4]), float(poi[1]), float(poi[2]))
+                          for poi in tile.get("pois", []) if len(poi) >= 5 and poi[4])
+    exact = [c for c in candidates if _clean_name(c[0]).casefold() == wanted]
+    matches = exact or [c for c in candidates if wanted in _clean_name(c[0]).casefold()
+                        or _clean_name(c[0]).casefold() in wanted]
+    if not matches:
+        return None
+    name, lat, lon = min(matches, key=lambda c: abs(len(_clean_name(c[0])) - len(wanted)))
+    if not guards.in_delhi(lat, lon):
+        return None
+    return {"lat": lat, "lon": lon, "display_name": f"{name} (saved map match; approximate)",
+            "in_area": True, "approximate": True}
+
+
 def geocode(place: str) -> dict:
     """Place name -> {lat, lon}. Nominatim allows max 1 request/second."""
     key = place.strip().lower()
     with _geo_lock:
         if key in _geo_cache:
-            cached = _geo_cache[key]
-            if cached.get("in_area"):
-                return cached
-            fallback = _offline_area_lookup(place)
-            if fallback:
-                _geo_cache[key] = fallback
-                return fallback
-            return _require_area(cached, place)
+            return _require_area(_geo_cache[key], place)
         local = metro_station_lookup(place)
         if local:
             local["in_area"] = _in_area({}, local["lat"], local["lon"])
@@ -4629,40 +4524,30 @@ def geocode(place: str) -> dict:
         queries = spelling_variants(place)
         named_region = bool("," in place or other_city_in(place) or NCR_TOWN_PATTERN.search(place) or
                             re.search(r"\b(?:Delhi|Agra|Noida|Gurugram|Gurgaon|Ghaziabad|Faridabad|Mumbai|Bengaluru|Bangalore|Kolkata|Chennai|Pune|Hyderabad|Jaipur|Lucknow|Chandigarh)\b", place, re.I))
-        # For Delhi place names, retry shorter forms because some geocoders reject
-        # the dropdown's full "Place, Delhi, India" query.
-        if re.search(r"\bDelhi\b", place, re.I):
-            head = place.split(",", 1)[0].strip()
-            queries.extend([head + ", Delhi", head])
-        elif not named_region:
+        # Resolve exactly what the user typed first. Delhi is only a fallback for a
+        # regionless name; never bias a named city/region toward Delhi.
+        if not named_region:
             queries += [q + ", " + DEFAULT_CITY for q in list(queries)]
         stripped = _strip_station_words(place)
         if stripped and stripped.lower() != place.split(",")[0].strip().lower() and not named_region:
             queries.append(stripped + ", " + DEFAULT_CITY)
-        outside_result = False
         for query in queries:
             try:
                 data = _nominatim(query)
             except requests.RequestException:
-                fallback = _offline_area_lookup(place)
-                if fallback:
-                    _geo_cache[key] = fallback
-                    return fallback
-                raise
+                data = []
             if data:
                 lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
                 result = {"lat": lat, "lon": lon, "display_name": data[0].get("display_name"),
                         "in_area": _in_area(data[0].get("address"), lat, lon)}
-                if result["in_area"]:
-                    _geo_cache[key] = result
-                    return result
-                outside_result = True
-        fallback = _offline_area_lookup(place)
-        if fallback:
-            _geo_cache[key] = fallback
-            return fallback
-        if outside_result:
-            raise OutsideArea(place)
+                _geo_cache[key] = result
+                return _require_area(result, place)
+        # Saved map data is only a fallback. It provides a nearby anchor when online
+        # geocoding is unavailable, but must not replace an exact place result.
+        saved = saved_place_lookup(place)
+        if saved:
+            _geo_cache[key] = saved
+            return saved
         raise PlaceNotFound(place)
 
 
@@ -6686,11 +6571,7 @@ _TIME_TAIL = re.compile(
     r"\s+(?:safely|safe)\b.*$|"
     r"\s+(?:by|via|using)\s+(?:the\s+)?(?:metro|subway|bus)\b.*$|"
     r"\s+(?:which|what)\s+(?:is\s+)?(?:the\s+)?(?:safest|best)\s+(?:coach|carriage|compartment)\b.*$", re.IGNORECASE)
-PLACEHOLDER = re.compile(
-    r"^(?:the station|station|my hostel|hostel|home|my home|ghar|my house|any slum or colony area|slum|colony|"
-    r"there|here|somewhere|extend it|shouldn'?t i go|mera pati mujhe ghar|"
-    r"a|b|x|y|xyz|nowhereville)$", re.I)
-PLANETARY_BODY = re.compile(r"^(?:mercury|venus|earth|mars|jupiter|saturn|uranus|neptune|pluto)$", re.I)
+PLACEHOLDER = re.compile(r"^(?:the station|station|my hostel|hostel|home|my home|ghar|my house|any slum or colony area|slum|colony|there|here|somewhere|extend it|shouldn'?t i go|mera pati mujhe ghar)$", re.I)
 
 
 def regex_route_fallback(message: str):
@@ -6708,9 +6589,7 @@ def regex_route_fallback(message: str):
     if not m:
         return None, None
     origin, dest = m.group(1).strip(" ,.?"), m.group(2).strip(" ,.?")
-    origin = re.sub(
-        r"^(hi|hello|hey|please|pls|bhai|go|travel|route|take me|i want to go|i need to go)[\s,:;!\-]+",
-        "", origin, flags=re.I)
+    origin = re.sub(r"^(hi|hello|hey|please|pls|bhai|go|travel|route|take me|i want to go|i need to go)\s+", "", origin, flags=re.I)
     origin = re.sub(r"^from\s+", "", origin, flags=re.I)
     dest = re.sub(r"\s+(please|pls|plz)$", "", _TIME_TAIL.sub("", dest), flags=re.I).strip(" ,.?")
     origin = re.sub(r"\bCP\b", "Connaught Place", origin, flags=re.I)
@@ -6727,7 +6606,7 @@ def regex_route_fallback(message: str):
 def route_followup_from_history(message: str, history):
     """Recover a recent user-stated trip for short route follow-ups without guessing places."""
     followup = re.search(
-        r"\b(?:same route|same trip|that route|this route|at\s+\d|by metro|by bus|using (?:the )?bus|longer route|"
+        r"\b(?:same route|that route|this route|at\s+\d|by metro|by bus|longer route|"
         r"more shops|most police|safest coach|which coach|what about the route)\b", message, re.I)
     if not followup:
         return None, None
@@ -7053,11 +6932,9 @@ def chat_query():
 
     # State-changing requests are guarded in code before the model can reinterpret them.
     if guards.emergency_active(sid) and guards.CANCEL_INTENT.search(message):
-        return jsonify(guards.pin_required_reply(lang))
+        return jsonify(guards.cancel_blocked_reply(lang))
     if guards.SETTINGS_INTENT.search(message):
         return jsonify(guards.settings_refusal(lang))
-    if PRIVACY_INTENT.search(message):
-        return jsonify({"has_route": False, "source": "privacy", "ai_response": privacy_reply(lang)})
     location_query = bool(CHAT_LOCATION_INTENT.search(message))
     capability = None if location_query else guards.capability_reply(message, lang)
     if capability:
@@ -7066,11 +6943,11 @@ def chat_query():
                         "ai_response": capability})
     if guards.emergency_active(sid):
         follow_up = {
-            "en": "Your emergency state is still active. The SOS panel is open. Move toward people or a secure place if you can, and call 112 if you are in immediate danger. Enter your PIN in the SOS panel to cancel when it is safe to do so.",
-            "hinglish": "Emergency abhi active hai aur SOS panel khula hai. Agar ho sake to logon ya kisi secure jagah ki taraf jaiye. Turant khatra ho to 112 par call karein. Safe ho tab cancel karne ke liye SOS panel mein PIN daalein.",
-            "hi": "आपातकालीन स्थिति अभी सक्रिय है और SOS पैनल खुला है। यदि संभव हो तो लोगों या किसी सुरक्षित जगह की ओर जाएँ। तुरंत ख़तरा हो तो 112 पर कॉल करें। सुरक्षित होने पर रद्द करने के लिए SOS पैनल में PIN डालें।",
-        }.get(lang, "Your emergency state is still active. The SOS panel is open. Call 112 if you are in immediate danger. Enter your PIN in the SOS panel to cancel when safe.")
-        return jsonify({"emergency": True, "open_sos": True, "pin_required": True,
+            "en": "Your emergency state is still active. The SOS panel is open. Move toward people or a secure place if you can, and call 112 if you are in immediate danger. Press End emergency in the SOS panel when it is safe to do so.",
+            "hinglish": "Emergency abhi active hai aur SOS panel khula hai. Agar ho sake to logon ya kisi secure jagah ki taraf jaiye. Turant khatra ho to 112 par call karein. Safe ho tab band karne ke liye SOS panel mein End emergency dabayein.",
+            "hi": "आपातकालीन स्थिति अभी सक्रिय है और SOS पैनल खुला है। यदि संभव हो तो लोगों या किसी सुरक्षित जगह की ओर जाएँ। तुरंत ख़तरा हो तो 112 पर कॉल करें। सुरक्षित होने पर बंद करने के लिए SOS पैनल में 'आपातकाल समाप्त करें' दबाएँ।",
+        }.get(lang, "Your emergency state is still active. The SOS panel is open. Call 112 if you are in immediate danger. Press End emergency in the SOS panel when safe.")
+        return jsonify({"emergency": True, "open_sos": True,
                         "has_route": False, "source": "emergency-follow-up", "ai_response": follow_up})
 
     if (ROUTE_INTENT.search(message) and
@@ -7248,9 +7125,6 @@ def chat_query():
     if has_route and (PLACEHOLDER.fullmatch(origin.strip()) or PLACEHOLDER.fullmatch(destination.strip())):
         return jsonify({"has_route": False, "source": "rule",
                         "ai_response": "Please give real place names for both the start and destination; I can't route to a generic place like home or 'the station'."})
-    if has_route and PLANETARY_BODY.fullmatch(origin.strip()) and PLANETARY_BODY.fullmatch(destination.strip()):
-        return jsonify({"has_route": False, "source": "rule",
-                        "ai_response": "Those look like planetary names rather than Delhi places. Please give specific start and destination places."})
     if has_route and THIRD_PARTY_PLACE.search(origin) and THIRD_PARTY_PLACE.search(destination):
         app.logger.warning("Refused a request (other_person)")
         return jsonify(refusal_reply("other_person", lang))
@@ -7419,21 +7293,16 @@ def find_safer_detours(a: dict, b: dict, mode: str, routes: list, max_extra: int
 @app.route("/plan_route", methods=["POST"])
 def plan_route():
     p = request.get_json(silent=True) or {}
-    origin = str(p.get("origin") or "").strip()[:200]
-    destination = str(p.get("destination") or "").strip()[:200]
+    origin = str(p.get("origin", "")).strip()[:200]
+    destination = str(p.get("destination", "")).strip()[:200]
+    # The browser sends null when no optional via stop was chosen. Treat it as blank,
+    # never as the literal place name "None".
     via_name = str(p.get("via") or "").strip()[:200]
     mode = p.get("mode") if p.get("mode") in ("WALKING", "TRANSIT", "BUS") else "DRIVING"
     requested_time = p.get("departure_time") or p.get("time")
     _SCORING_CONTEXT.hour = parse_departure_hour(requested_time)
     if not origin or not destination:
         return jsonify({"error": "Please give both a start and a destination."}), 400
-    if origin.casefold() in {"none", "null", "undefined"} or destination.casefold() in {"none", "null", "undefined"}:
-        app.logger.error("Route request contained an empty endpoint sentinel: origin=%r destination=%r", origin, destination)
-        return jsonify({"error": "The app sent an empty start or destination. Re-select both places and try again."}), 400
-    if PLACEHOLDER.fullmatch(origin) or PLACEHOLDER.fullmatch(destination):
-        return jsonify({"error": "Please enter specific place names for both the start and destination. Generic or placeholder names cannot be routed."}), 400
-    if PLANETARY_BODY.fullmatch(origin) and PLANETARY_BODY.fullmatch(destination):
-        return jsonify({"error": "Those look like planetary names rather than Delhi places. Please enter specific start and destination places."}), 400
 
     try:
         origin_coords = p.get("origin_coords")
@@ -7481,8 +7350,6 @@ def plan_route():
     if not guards.in_delhi(b["lat"], b["lon"]):
         return jsonify({"error": guards.outside_delhi_message(destination), "outside_area": True,
                         "open_sos": True}), 422
-    if haversine(a["lat"], a["lon"], b["lat"], b["lon"]) < 25:
-        return jsonify({"error": "The start and destination resolve to the same place. Please choose two different places."}), 400
     if c and not guards.in_delhi(c["lat"], c["lon"]):
         return jsonify({"error": guards.outside_delhi_message(via_name), "outside_area": True,
                         "open_sos": True}), 422
@@ -8163,7 +8030,7 @@ if __name__ == "__main__":
         else:
             try:
                 webview.create_window(
-                    "Women Safety Shield AI - Mobile" if cli.mobile else "Women Safety Shield AI",
+                    "Saheli AI - Mobile" if cli.mobile else "Saheli AI",
                     ui_url,
                     width=430 if cli.mobile else 1100,
                     height=900 if cli.mobile else 780,

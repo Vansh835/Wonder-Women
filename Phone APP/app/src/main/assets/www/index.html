@@ -9,10 +9,18 @@
     apiBase = String(base || "").trim().replace(/\/+$/, "");
     apiToken = String(token || "").trim();
   };
+  function restorePhoneApiConfig() {
+    if (apiBase || !window.SafetyNative || !window.SafetyNative.getPhoneApiConfig) return;
+    try {
+      const config = JSON.parse(window.SafetyNative.getPhoneApiConfig());
+      window.setPhoneApiConfig(config.base, config.token);
+    } catch (_) {}
+  }
   const originalFetch = window.fetch.bind(window);
   window.fetch = function(input, init) {
     const path = typeof input === "string" ? input : input.url;
     if (typeof path === "string" && path.startsWith("/")) {
+      restorePhoneApiConfig();
       if (!apiBase) return Promise.reject(new Error("Open Computer API settings and enter the server address."));
       const options = Object.assign({}, init || {});
       const headers = new Headers(options.headers || {});
@@ -36,7 +44,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#10191d">
-<title>Women Safety Shield</title>
+<title>Saheli AI</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -276,7 +284,7 @@
 </style>
 </head>
 <body>
-<div id="welcomeScreen" role="dialog" aria-label="Welcome to Safety Shield AI" aria-modal="true">
+<div id="welcomeScreen" role="dialog" aria-label="Welcome to Saheli AI" aria-modal="true">
     <div class="welcome-mark" aria-hidden="true">&#x1F6E1;&#xFE0F;</div>
     <h1 class="welcome-title">Safety Shield <span>AI</span></h1>
     <p class="welcome-subtitle">A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.</p>
@@ -293,7 +301,7 @@
 <div class="panel" id="leftPanel">
     <div class="chat-header">
         <span>&#x1F6E1;&#xFE0F;</span>
-        <h2>Safety Shield AI</h2>
+        <h2>Saheli AI</h2>
         <select id="uiLanguageQuick" aria-label="Screen language" onchange="setUiLanguage(this.value)"><option value="en">EN</option><option value="hi">हिंदी</option></select>
         <div class="theme-picker" id="themePicker" title="Change app color"></div>
         <button class="fake-btn" onclick="openFake()">&#x1F4DE; Fake Call</button>
@@ -448,6 +456,16 @@ function enterSafetyShield() {
 }
 const HELPLINES = [{"name": "Emergency (all services)", "number": "112"}, {"name": "Women Helpline", "number": "1091"}, {"name": "Women Helpline", "number": "181"}, {"name": "Child Helpline", "number": "1098"}, {"name": "Police", "number": "100"}, {"name": "Cyber Crime", "number": "1930"}, {"name": "National Commission for Women", "number": "7827170170"}];
 const COMMON_PLACES = ["Rohini", "Kanjhawala", "Moti Nagar", "Nangloi", "Punjabi Bagh", "Pitampura", "Janakpuri", "Rajouri Garden", "Dwarka", "Connaught Place", "Karol Bagh", "Hauz Khas", "Saket", "Lajpat Nagar", "Chandni Chowk", "Kashmere Gate", "Vasant Kunj", "Paschim Vihar", "Shalimar Bagh", "Model Town", "Mayur Vihar", "Preet Vihar", "Laxmi Nagar", "Shahdara", "Nehru Place"];
+const SESSION_ID = (() => {
+    try {
+        let value = sessionStorage.getItem('ss_session_id');
+        if (!value) {
+            value = crypto.randomUUID();
+            sessionStorage.setItem('ss_session_id', value);
+        }
+        return value;
+    } catch (_) { return 'android-session'; }
+})();
 
     const THEMES = [
     { id: 'pink',   name: 'Pink',   accent: '#ff4081', hover: '#f50057' },
@@ -1012,7 +1030,7 @@ async function sendChatMessage() {
             await planRoute(data.origin, data.destination, document.getElementById('mode').value);
         }
     } catch (e) {
-        thinking.textContent = 'Could not reach the local assistant. Is the app still running?';
+        thinking.textContent = 'Could not reach the computer API: ' + (e.message || 'check Server settings, token, and Wi-Fi.');
     }
     document.getElementById('chatBox').scrollTop = 1e9;
 }
