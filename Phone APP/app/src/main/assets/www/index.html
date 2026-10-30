@@ -220,6 +220,11 @@
             border-radius: 0; background: var(--app-bg); }
         #sosPanel h3 { display: inline-block; margin: 8px 0 4px; font-size: 22px; color: #ff7575; }
         #sosPanel h4 { margin: 24px 0 8px; font-size: 16px; }
+        #sosPanel .safety-card { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-bg); box-shadow: 0 4px 14px #0002; }
+        #sosPanel .safety-card h4 { margin: 0 0 10px; }
+        #sosPanel .safety-card input:not([type="checkbox"]), #sosPanel .safety-card textarea, #sosPanel .safety-card select { width: 100%; box-sizing: border-box; min-height: 44px; margin: 5px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--app-bg); color: #fff; }
+        #sosPanel .safety-card textarea { min-height: 76px; }
+        #sosPanel .safety-card button { min-height: 44px; }
         #sosPanel .small { font-size: 14px; color: var(--muted); }
         .safety-panel-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
         .safety-panel-top button { min-width: 76px; min-height: 44px; background: var(--surface-raised); }
@@ -338,6 +343,7 @@
         <div class="row">
             <button class="primary" onclick="getLocation()">&#x1F4CD; Get my location</button>
             <button onclick="copySOS()">Copy message</button>
+            <button onclick="shareCurrentLocation()">Share map link</button>
         </div>
         <textarea id="sosMsg" readonly>I need help. Please call me or contact the police.</textarea>
         <div id="locStatus" class="small"></div>
@@ -354,25 +360,33 @@
         <select id="checkInContact" aria-label="Contact for check-in reminder"></select>
         <div class="row"><input id="checkInMinutes" type="number" min="1" max="720" value="40" aria-label="Minutes until check-in"><button onclick="startCheckIn()">Start timer</button><button onclick="confirmCheckIn()">I'm home</button></div>
         <div id="checkInStatus" class="small">Choose how many minutes until you expect to be home.</div>
-        <h4>Saved places (stored on this device)</h4>
+        <div class="safety-card"><h4>Saved places (stored on this device)</h4>
         <input id="homePlace" type="text" placeholder="Home place name">
         <input id="workPlace" type="text" placeholder="Work place name">
         <button onclick="savePersonalPlaces()">Save home and work</button>
+        </div>
+        <div class="safety-card">
         <h4>Language</h4>
         <select id="uiLanguage" onchange="setUiLanguage(this.value)"><option value="en">English</option><option value="hi">हिन्दी</option></select>
         <label for="voiceLanguage">Voice input language</label>
         <select id="voiceLanguage" onchange="localStorage.setItem('voice_language', this.value)"><option value="hinglish">Hinglish</option><option value="hi">Hindi</option><option value="en">English (India)</option></select>
+        </div>
+        <div class="safety-card">
         <h4>Check score against your audit points</h4>
         <p class="small">Paste latitude, longitude, and your own label (busy or empty), one point per line.</p>
         <textarea id="auditPoints" placeholder="28.6139,77.2090,busy"></textarea>
         <button onclick="compareAuditPoints()">Compare audit points</button>
         <div id="auditResult" class="small"></div>
+        </div>
+        <div class="safety-card">
         <h4>Share cab details</h4>
         <input id="cabDriver" type="text" placeholder="Driver name">
         <input id="cabPlate" type="text" placeholder="Vehicle number plate">
         <div class="row"><button onclick="prepareCabShare()">Prepare cab SMS</button><a class="btnlink" id="cabSmsLink" href="#">Open SMS</a></div>
         <textarea id="cabShareMsg" readonly placeholder="Review the message, then open SMS to send it."></textarea>
+        </div>
         <h4>Other safety tools</h4>
+        <label><input id="shakeSosEnabled" type="checkbox" onchange="setShakeSOS(this.checked)"> Shake phone to open SOS (works while app is open)</label>
         <button class="safety-tool-button fake-btn" onclick="toggleSOS(false); openFake()">&#x1F4DE; Set up a fake call</button>
         <h4>Appearance</h4>
         <select id="mobileThemeSelect" aria-label="App color theme" onchange="setTheme(this.value)">
@@ -601,7 +615,7 @@ function addActivityOverlayControl() {
     control.onAdd = function() {
         const wrap = L.DomUtil.create('div', 'leaflet-bar');
         const button = L.DomUtil.create('button', '', wrap);
-        button.type = 'button'; button.textContent = 'Busy / empty areas';
+        button.type = 'button'; button.className = 'activity-overlay-toggle'; button.textContent = localStorage.getItem('ui_language') === 'hi' ? 'व्यस्त / खाली क्षेत्र' : 'Busy / empty areas';
         button.style.cssText = 'width:auto;padding:7px 10px;background:white;color:#222;font-size:12px;white-space:nowrap';
         button.onclick = toggleActivityOverlay; L.DomEvent.disableClickPropagation(wrap); return wrap;
     };
@@ -1056,6 +1070,26 @@ function getLocation() {
     }, () => { s.textContent = 'Could not get location (permission denied or unavailable).'; },
     { enableHighAccuracy: true, timeout: 10000 });
 }
+function shareCurrentLocation() {
+    const status = document.getElementById('locStatus');
+    if (!navigator.geolocation) { status.textContent = 'Location is not available in this window.'; return; }
+    status.textContent = 'Getting location...';
+    navigator.geolocation.getCurrentPosition(async p => {
+        lastPos = { lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) };
+        refreshSOS();
+        const url = 'https://www.google.com/maps/search/?api=1&query=' + lastPos.lat + ',' + lastPos.lng;
+        try {
+            if (navigator.share) { await navigator.share({ title: 'My current location', url }); status.textContent = 'Current location shared. This link does not update as you move.'; }
+            else if (await copyText(url)) status.textContent = 'Map link copied. Send it to your trusted contact.';
+            else status.textContent = url;
+        } catch (e) { if (e.name !== 'AbortError') status.textContent = 'Could not share the map link.'; }
+    }, () => { status.textContent = 'Could not get location (permission denied or unavailable).'; }, { enableHighAccuracy: true, timeout: 10000 });
+}
+function setShakeSOS(enabled) {
+    if (window.SafetyNative) window.SafetyNative.setShakeSOS(!!enabled);
+    else if (enabled) document.getElementById('locStatus').textContent = 'Shake-to-SOS is available in the Android app while it is open.';
+}
+window.triggerShakeSOS = () => { toggleSOS(true); };
 async function copySOS() {
     const ok = await copyText(document.getElementById('sosMsg').value);
     document.getElementById('locStatus').textContent = ok ? 'Copied. Paste it into any chat.' : 'Copy failed. Select the text and copy manually.';
@@ -1152,12 +1186,23 @@ function setUiLanguage(language) {
         'Saved places (stored on this device)':'सहेजी गई जगहें (इसी डिवाइस पर)','Save home and work':'घर और काम की जगह सहेजें',
         'Trusted contact':'भरोसेमंद संपर्क','Save contact':'संपर्क सहेजें','Language':'भाषा','Share cab details':'कैब की जानकारी साझा करें',
         'Prepare cab SMS':'कैब SMS तैयार करें','Compare audit points':'ऑडिट पॉइंट की तुलना करें','Share my location':'मेरी लोकेशन साझा करें',
-        'Chat':'चैट','Map':'नक्शा','Safety':'सुरक्षा' } : {};
-    document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child').forEach(node => {
+        'Chat':'चैट','Map':'नक्शा','Safety':'सुरक्षा',
+        'A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.':'हर सफ़र में थोड़ा और भरोसा। रास्तों की जानकारी और आपातकालीन साधन एक ही जगह पाएँ।',
+        'Stay aware. Stay connected. Stay safe.':'सतर्क रहें, जुड़े रहें और अपने विकल्प जानें।','Safer routes':'बेहतर रास्ते',
+        'AI travel help':'AI यात्रा सहायता','SOS tools':'SOS साधन','Choose how many minutes until you expect to be home.':'घर पहुँचने का अनुमानित समय मिनटों में चुनें।',
+        'Driving':'कार','Walking':'पैदल','Metro + walk':'मेट्रो + पैदल','Bus + walk':'बस + पैदल','Busy / empty areas':'व्यस्त / खाली क्षेत्र',
+        'Copy trip link':'यात्रा लिंक कॉपी करें','How is this scored?':'यह स्कोर कैसे बना?','Emergency controls':'आपातकालीन नियंत्रण' } : {};
+    document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child,.welcome-chip,.welcome-subtitle,.welcome-footnote,label,.small,.btnlink,p,.emergency-call span span').forEach(node => {
+        if (node.children.length) return;
         if (!node.dataset.originalText) node.dataset.originalText = node.textContent;
         node.textContent = translations[node.dataset.originalText] || node.dataset.originalText;
     });
+    document.querySelectorAll('#mode option').forEach(option => {
+        if (!option.dataset.originalText) option.dataset.originalText = option.textContent;
+        option.textContent = translations[option.dataset.originalText] || option.dataset.originalText;
+    });
     ['uiLanguage', 'uiLanguageQuick'].forEach(id => { const ui = document.getElementById(id); if (ui) ui.value = selected; });
+    document.querySelectorAll('.activity-overlay-toggle').forEach(button => { button.textContent = selected === 'hi' ? 'व्यस्त / खाली क्षेत्र' : 'Busy / empty areas'; });
 }
 function initLocalSafetyFeatures() {
     try {
@@ -1167,6 +1212,7 @@ function initLocalSafetyFeatures() {
         document.getElementById('homePlace').value = places.home || ''; document.getElementById('workPlace').value = places.work || '';
         document.getElementById('voiceLanguage').value = localStorage.getItem('voice_language') || 'hinglish';
         refreshTrustedContactOptions(); syncPersonalPlaceOptions(); setUiLanguage(localStorage.getItem('ui_language') || 'en');
+        const shake = document.getElementById('shakeSosEnabled'); if (shake) shake.checked = localStorage.getItem('shake_sos') === 'true';
         const state = JSON.parse(localStorage.getItem('check_in_timer') || 'null');
         if (state && state.active) {
             if (state.expiresAt <= Date.now()) checkInExpired(state);
@@ -1188,6 +1234,7 @@ function prepareCabShare() {
 }
 document.getElementById('contactInput').addEventListener('input', () => { refreshSOS(); refreshTrustedContactOptions(); });
 document.getElementById('additionalContacts').addEventListener('input', refreshTrustedContactOptions);
+document.getElementById('shakeSosEnabled').addEventListener('change', e => localStorage.setItem('shake_sos', String(e.target.checked)));
 /* ---------- fake call ---------- */
 const FAKE_SCRIPT = {
     hi: ["\u0939\u0947\u0932\u094b \u092c\u0947\u091f\u093e, \u0924\u0942 \u0915\u0939\u093e\u0901 \u0939\u0948? \u092e\u0948\u0902 \u092c\u0938 \u0926\u094b \u092e\u093f\u0928\u091f \u092e\u0947\u0902 \u092a\u0939\u0941\u0901\u091a \u0930\u0939\u093e \u0939\u0942\u0901\u0964",

@@ -1162,6 +1162,10 @@ HTML_TEMPLATE = r"""
 
     #sosPanel { display: none; position: absolute; inset: 0; background: #2a2a35; border-radius: 16px; padding: 20px; z-index: 10; overflow-y: auto; }
     #sosPanel h3 { margin: 0 0 10px; color: #ff1744; }
+    #sosPanel .safety-card { margin: 14px 0; padding: 14px; border: 1px solid #454553; border-radius: 14px; background: #22222d; box-shadow: 0 4px 14px #0002; }
+    #sosPanel .safety-card h4 { margin: 0 0 10px; }
+    #sosPanel .safety-card input:not([type="checkbox"]), #sosPanel .safety-card textarea, #sosPanel .safety-card select { box-sizing: border-box; min-height: 42px; margin: 6px 0; padding: 10px 12px; border: 1px solid #50505e; border-radius: 9px; background: #292936; color: #fff; }
+    #sosPanel .safety-card > button { min-height: 40px; }
     .helpline { display: flex; justify-content: space-between; background: #15151c; padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 14px; }
     .helpline a { color: #00e676; font-weight: 700; text-decoration: none; }
     #sosMsg { width: 100%; height: 90px; background: #15151c; border: 1px solid #444; border-radius: 8px; padding: 8px; resize: none; margin: 6px 0; }
@@ -1328,6 +1332,7 @@ HTML_TEMPLATE = r"""
         <div class="row">
             <button class="primary" onclick="getLocation()">&#x1F4CD; Get my location</button>
             <button onclick="copySOS()">Copy message</button>
+            <button onclick="shareCurrentLocation()">Share map link</button>
         </div>
         <textarea id="sosMsg" readonly>I need help. Please call me or contact the police.</textarea>
         <div id="locStatus" class="small"></div>
@@ -1344,24 +1349,31 @@ HTML_TEMPLATE = r"""
         <select id="checkInContact" aria-label="Contact for check-in reminder"></select>
         <div class="row"><input id="checkInMinutes" type="number" min="1" max="720" value="40" aria-label="Minutes until check-in"><button onclick="startCheckIn()">Start timer</button><button onclick="confirmCheckIn()">I'm home</button></div>
         <div id="checkInStatus" class="small">Choose how many minutes until you expect to be home.</div>
-        <h4>Saved places (stored on this device)</h4>
+        <div class="safety-card"><h4>Saved places (stored on this device)</h4>
         <input id="homePlace" type="text" placeholder="Home place name">
         <input id="workPlace" type="text" placeholder="Work place name">
         <button onclick="savePersonalPlaces()">Save home and work</button>
+        </div>
+        <div class="safety-card">
         <h4>Language</h4>
         <select id="uiLanguage" onchange="setUiLanguage(this.value)"><option value="en">English</option><option value="hi">हिन्दी</option></select>
         <label for="voiceLanguage">Voice input language</label>
         <select id="voiceLanguage" onchange="localStorage.setItem('voice_language', this.value)"><option value="hinglish">Hinglish</option><option value="hi">Hindi</option><option value="en">English (India)</option></select>
+        </div>
+        <div class="safety-card">
         <h4>Check score against your audit points</h4>
         <p class="small">Paste latitude, longitude, and your own label (busy or empty), one point per line.</p>
         <textarea id="auditPoints" placeholder="28.6139,77.2090,busy"></textarea>
         <button onclick="compareAuditPoints()">Compare audit points</button>
         <div id="auditResult" class="small"></div>
+        </div>
+        <div class="safety-card">
         <h4>Share cab details</h4>
         <input id="cabDriver" type="text" placeholder="Driver name">
         <input id="cabPlate" type="text" placeholder="Vehicle number plate">
         <div class="row"><button onclick="prepareCabShare()">Prepare cab SMS</button><a class="btnlink" id="cabSmsLink" href="#">Open SMS</a></div>
         <textarea id="cabShareMsg" readonly placeholder="Review the message, then open SMS to send it."></textarea>
+        </div>
         <div class="row"><button onclick="toggleSOS(false)">Close</button></div>
     </div>
 <div id="fakePanel">
@@ -1582,7 +1594,7 @@ function addActivityOverlayControl() {
     control.onAdd = function() {
         const wrap = L.DomUtil.create('div', 'leaflet-bar');
         const button = L.DomUtil.create('button', '', wrap);
-        button.type = 'button'; button.textContent = 'Busy / empty areas';
+        button.type = 'button'; button.className = 'activity-overlay-toggle'; button.textContent = localStorage.getItem('ui_language') === 'hi' ? 'व्यस्त / खाली क्षेत्र' : 'Busy / empty areas';
         button.style.cssText = 'width:auto;padding:7px 10px;background:white;color:#222;font-size:12px;white-space:nowrap';
         button.onclick = toggleActivityOverlay;
         L.DomEvent.disableClickPropagation(wrap);
@@ -2039,6 +2051,21 @@ function getLocation() {
     }, () => { s.textContent = 'Could not get location (permission denied or unavailable).'; },
     { enableHighAccuracy: true, timeout: 10000 });
 }
+function shareCurrentLocation() {
+    const status = document.getElementById('locStatus');
+    if (!navigator.geolocation) { status.textContent = 'Location is not available in this window.'; return; }
+    status.textContent = 'Getting location...';
+    navigator.geolocation.getCurrentPosition(async p => {
+        lastPos = { lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) };
+        refreshSOS();
+        const url = 'https://www.google.com/maps/search/?api=1&query=' + lastPos.lat + ',' + lastPos.lng;
+        try {
+            if (navigator.share) { await navigator.share({ title: 'My current location', url }); status.textContent = 'Current location shared. This link does not update as you move.'; }
+            else if (await copyText(url)) status.textContent = 'Map link copied. Send it to your trusted contact.';
+            else status.textContent = url;
+        } catch (e) { if (e.name !== 'AbortError') status.textContent = 'Could not share the map link.'; }
+    }, () => { status.textContent = 'Could not get location (permission denied or unavailable).'; }, { enableHighAccuracy: true, timeout: 10000 });
+}
 async function copySOS() {
     const ok = await copyText(document.getElementById('sosMsg').value);
     document.getElementById('locStatus').textContent = ok ? 'Copied. Paste it into any chat.' : 'Copy failed. Select the text and copy manually.';
@@ -2161,11 +2188,31 @@ function setUiLanguage(language) {
         'Get my location': 'मेरी लोकेशन लें', 'Copy message': 'संदेश कॉपी करें', 'Save contact': 'संपर्क सहेजें',
         'Compare audit points': 'ऑडिट पॉइंट की तुलना करें', 'More trusted numbers, one per line': 'अतिरिक्त भरोसेमंद नंबर, हर पंक्ति में एक',
         'Other safety tools': 'अन्य सुरक्षा साधन', 'Share my location': 'मेरी लोकेशन साझा करें', 'Home place name': 'घर की जगह का नाम',
-        'Work place name': 'काम की जगह का नाम', 'Map': 'नक्शा', 'Safety': 'सुरक्षा', 'Chat': 'चैट'
+        'Work place name': 'काम की जगह का नाम', 'Map': 'नक्शा', 'Safety': 'सुरक्षा', 'Chat': 'चैट',
+        'A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.': 'हर सफ़र में थोड़ा और भरोसा। रास्तों की जानकारी और आपातकालीन साधन एक ही जगह पाएँ।',
+        'Stay aware. Stay connected. Know your options.': 'सतर्क रहें, जुड़े रहें और अपने विकल्प जानें।',
+        'Safer routes': 'बेहतर रास्ते', 'AI travel help': 'AI यात्रा सहायता', 'SOS tools': 'SOS साधन',
+        'If you are in immediate danger, call 112 now. On a desktop, use your phone to dial. These numbers are for India.': 'अगर तुरंत ख़तरा हो तो 112 पर कॉल करें। डेस्कटॉप पर अपने फ़ोन से कॉल करें। ये नंबर भारत के लिए हैं।',
+        'SMS opens your default messaging app (works best when this runs on a phone or a PC linked to one).': 'SMS आपका मैसेजिंग ऐप खोलता है; भेजने से पहले संदेश जाँचें।',
+        'SMS opens your messaging app with the message ready to send.': 'SMS ऐप में संदेश तैयार होगा; भेजने से पहले उसे जाँचें।',
+        'Saved places (stored on this device)': 'सहेजी गई जगहें (इसी डिवाइस पर)',
+        'Choose how many minutes until you expect to be home.': 'घर पहुँचने का अनुमानित समय मिनटों में चुनें।',
+        'Compare audit points': 'ऑडिट पॉइंट की तुलना करें', 'Chat': 'चैट',
+        'Check-in timer': 'चेक-इन टाइमर', 'Home': 'घर', 'Work': 'काम',
+        'Driving': 'कार', 'Walking': 'पैदल', 'Metro + walk': 'मेट्रो + पैदल', 'Bus + walk': 'बस + पैदल',
+        'Busy / empty areas': 'व्यस्त / खाली क्षेत्र', 'Emergency controls': 'आपातकालीन नियंत्रण',
+        'Share my location': 'मेरी लोकेशन साझा करें', 'Set or change PIN': 'PIN बनाएँ या बदलें',
+        'Cancel emergency with PIN': 'PIN से आपातकाल रद्द करें', 'Copy trip link': 'यात्रा लिंक कॉपी करें',
+        'How is this scored?': 'यह स्कोर कैसे बना?'
     } : {};
-    document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child').forEach(node => {
+    document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child,.welcome-chip,.welcome-subtitle,.welcome-footnote,label,.small,.btnlink,p,.emergency-call span span').forEach(node => {
+        if (node.children.length) return;
         if (!node.dataset.originalText) node.dataset.originalText = node.textContent;
         node.textContent = text[node.dataset.originalText] || node.dataset.originalText;
+    });
+    document.querySelectorAll('#mode option').forEach(option => {
+        if (!option.dataset.originalText) option.dataset.originalText = option.textContent;
+        option.textContent = text[option.dataset.originalText] || option.dataset.originalText;
     });
     document.querySelectorAll('input[placeholder],textarea[placeholder]').forEach(node => {
         if (!node.dataset.originalPlaceholder) node.dataset.originalPlaceholder = node.placeholder;
@@ -2176,6 +2223,7 @@ function setUiLanguage(language) {
         }[node.dataset.originalPlaceholder] || node.dataset.originalPlaceholder) : node.dataset.originalPlaceholder;
     });
     ['uiLanguage', 'uiLanguageQuick'].forEach(id => { const selector = document.getElementById(id); if (selector) selector.value = selected; });
+    document.querySelectorAll('.activity-overlay-toggle').forEach(button => { button.textContent = selected === 'hi' ? 'व्यस्त / खाली क्षेत्र' : 'Busy / empty areas'; });
 }
 function initLocalSafetyFeatures() {
     try {
@@ -2187,6 +2235,7 @@ function initLocalSafetyFeatures() {
         document.getElementById('voiceLanguage').value = localStorage.getItem('voice_language') || 'hinglish';
         refreshTrustedContactOptions(); syncPersonalPlaceOptions();
         setUiLanguage(localStorage.getItem('ui_language') || 'en');
+        const shake = document.getElementById('shakeSosEnabled'); if (shake) shake.checked = localStorage.getItem('shake_sos') === 'true';
         const state = JSON.parse(localStorage.getItem('check_in_timer') || 'null');
         if (state && state.active) {
             if (state.expiresAt <= Date.now()) checkInExpired(state);
@@ -2196,6 +2245,21 @@ function initLocalSafetyFeatures() {
             }
         }
     } catch (e) {}
+}
+function shareCurrentLocation() {
+    const status = document.getElementById('locStatus');
+    if (!navigator.geolocation) { status.textContent = 'Location is not available in this window.'; return; }
+    status.textContent = 'Getting location...';
+    navigator.geolocation.getCurrentPosition(async p => {
+        lastPos = { lat: p.coords.latitude.toFixed(6), lng: p.coords.longitude.toFixed(6) };
+        refreshSOS();
+        const url = 'https://www.google.com/maps/search/?api=1&query=' + lastPos.lat + ',' + lastPos.lng;
+        try {
+            if (navigator.share) { await navigator.share({ title: 'My current location', url }); status.textContent = 'Current location shared. This link does not update as you move.'; }
+            else if (await copyText(url)) status.textContent = 'Map link copied. Send it to your trusted contact.';
+            else status.textContent = url;
+        } catch (e) { if (e.name !== 'AbortError') status.textContent = 'Could not share the map link.'; }
+    }, () => { status.textContent = 'Could not get location (permission denied or unavailable).'; }, { enableHighAccuracy: true, timeout: 10000 });
 }
 function prepareCabShare() {
     const number = (document.getElementById('contactInput').value || '').trim();
@@ -2554,6 +2618,11 @@ MOBILE_HTML_TEMPLATE = r"""
             border-radius: 0; background: var(--app-bg); }
         #sosPanel h3 { display: inline-block; margin: 8px 0 4px; font-size: 22px; color: #ff7575; }
         #sosPanel h4 { margin: 24px 0 8px; font-size: 16px; }
+        #sosPanel .safety-card { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-bg); box-shadow: 0 4px 14px #0002; }
+        #sosPanel .safety-card h4 { margin: 0 0 10px; }
+        #sosPanel .safety-card input:not([type="checkbox"]), #sosPanel .safety-card textarea, #sosPanel .safety-card select { width: 100%; box-sizing: border-box; min-height: 44px; margin: 5px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--app-bg); color: #fff; }
+        #sosPanel .safety-card textarea { min-height: 76px; }
+        #sosPanel .safety-card button { min-height: 44px; }
         #sosPanel .small { font-size: 14px; color: var(--muted); }
         .safety-panel-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
         .safety-panel-top button { min-width: 76px; min-height: 44px; background: var(--surface-raised); }
@@ -2672,6 +2741,7 @@ MOBILE_HTML_TEMPLATE = r"""
         <div class="row">
             <button class="primary" onclick="getLocation()">&#x1F4CD; Get my location</button>
             <button onclick="copySOS()">Copy message</button>
+            <button onclick="shareCurrentLocation()">Share map link</button>
         </div>
         <textarea id="sosMsg" readonly>I need help. Please call me or contact the police.</textarea>
         <div id="locStatus" class="small"></div>
@@ -2688,25 +2758,33 @@ MOBILE_HTML_TEMPLATE = r"""
         <select id="checkInContact" aria-label="Contact for check-in reminder"></select>
         <div class="row"><input id="checkInMinutes" type="number" min="1" max="720" value="40" aria-label="Minutes until check-in"><button onclick="startCheckIn()">Start timer</button><button onclick="confirmCheckIn()">I'm home</button></div>
         <div id="checkInStatus" class="small">Choose how many minutes until you expect to be home.</div>
-        <h4>Saved places (stored on this device)</h4>
+        <div class="safety-card"><h4>Saved places (stored on this device)</h4>
         <input id="homePlace" type="text" placeholder="Home place name">
         <input id="workPlace" type="text" placeholder="Work place name">
         <button onclick="savePersonalPlaces()">Save home and work</button>
+        </div>
+        <div class="safety-card">
         <h4>Language</h4>
         <select id="uiLanguage" onchange="setUiLanguage(this.value)"><option value="en">English</option><option value="hi">हिन्दी</option></select>
         <label for="voiceLanguage">Voice input language</label>
         <select id="voiceLanguage" onchange="localStorage.setItem('voice_language', this.value)"><option value="hinglish">Hinglish</option><option value="hi">Hindi</option><option value="en">English (India)</option></select>
+        </div>
+        <div class="safety-card">
         <h4>Check score against your audit points</h4>
         <p class="small">Paste latitude, longitude, and your own label (busy or empty), one point per line.</p>
         <textarea id="auditPoints" placeholder="28.6139,77.2090,busy"></textarea>
         <button onclick="compareAuditPoints()">Compare audit points</button>
         <div id="auditResult" class="small"></div>
+        </div>
+        <div class="safety-card">
         <h4>Share cab details</h4>
         <input id="cabDriver" type="text" placeholder="Driver name">
         <input id="cabPlate" type="text" placeholder="Vehicle number plate">
         <div class="row"><button onclick="prepareCabShare()">Prepare cab SMS</button><a class="btnlink" id="cabSmsLink" href="#">Open SMS</a></div>
         <textarea id="cabShareMsg" readonly placeholder="Review the message, then open SMS to send it."></textarea>
+        </div>
         <h4>Other safety tools</h4>
+        <label><input id="shakeSosEnabled" type="checkbox" onchange="setShakeSOS(this.checked)"> Shake phone to open SOS (works while app is open)</label>
         <button class="safety-tool-button fake-btn" onclick="toggleSOS(false); openFake()">&#x1F4DE; Set up a fake call</button>
         <h4>Appearance</h4>
         <select id="mobileThemeSelect" aria-label="App color theme" onchange="setTheme(this.value)">
@@ -2935,7 +3013,7 @@ function addActivityOverlayControl() {
     control.onAdd = function() {
         const wrap = L.DomUtil.create('div', 'leaflet-bar');
         const button = L.DomUtil.create('button', '', wrap);
-        button.type = 'button'; button.textContent = 'Busy / empty areas';
+        button.type = 'button'; button.className = 'activity-overlay-toggle'; button.textContent = localStorage.getItem('ui_language') === 'hi' ? 'व्यस्त / खाली क्षेत्र' : 'Busy / empty areas';
         button.style.cssText = 'width:auto;padding:7px 10px;background:white;color:#222;font-size:12px;white-space:nowrap';
         button.onclick = toggleActivityOverlay;
         L.DomEvent.disableClickPropagation(wrap);
@@ -3516,11 +3594,24 @@ function setUiLanguage(language) {
         'Language': 'भाषा', 'Share cab details': 'कैब की जानकारी साझा करें', 'Prepare cab SMS': 'कैब SMS तैयार करें', 'Open SMS': 'SMS खोलें',
         'Get my location': 'मेरी लोकेशन लें', 'Copy message': 'संदेश कॉपी करें', 'Save contact': 'संपर्क सहेजें',
         'Compare audit points': 'ऑडिट पॉइंट की तुलना करें', 'More trusted numbers, one per line': 'अतिरिक्त भरोसेमंद नंबर, हर पंक्ति में एक',
-        'Other safety tools': 'अन्य सुरक्षा साधन', 'Share my location': 'मेरी लोकेशन साझा करें', 'Map': 'नक्शा', 'Safety': 'सुरक्षा', 'Chat': 'चैट'
+        'Other safety tools': 'अन्य सुरक्षा साधन', 'Share my location': 'मेरी लोकेशन साझा करें', 'Map': 'नक्शा', 'Safety': 'सुरक्षा', 'Chat': 'चैट',
+        'A little more confidence for every journey. Explore safer routes, get travel guidance, and find emergency tools in one place.': 'हर सफ़र में थोड़ा और भरोसा। रास्तों की जानकारी और आपातकालीन साधन एक ही जगह पाएँ।',
+        'Stay aware. Stay connected. Stay safe.': 'सतर्क रहें, जुड़े रहें और अपने विकल्प जानें।',
+        'Safer routes': 'बेहतर रास्ते', 'AI travel help': 'AI यात्रा सहायता', 'SOS tools': 'SOS साधन',
+        'Choose how many minutes until you expect to be home.': 'घर पहुँचने का अनुमानित समय मिनटों में चुनें।',
+        'Driving': 'कार', 'Walking': 'पैदल', 'Metro + walk': 'मेट्रो + पैदल', 'Bus + walk': 'बस + पैदल',
+        'Busy / empty areas': 'व्यस्त / खाली क्षेत्र', 'Emergency controls': 'आपातकालीन नियंत्रण',
+        'Set or change PIN': 'PIN बनाएँ या बदलें', 'Cancel emergency with PIN': 'PIN से आपातकाल रद्द करें',
+        'Copy trip link': 'यात्रा लिंक कॉपी करें', 'How is this scored?': 'यह स्कोर कैसे बना?'
     } : {};
-    document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child').forEach(node => {
+    document.querySelectorAll('h2,h3,h4,button,.quick-route-title span,.mobile-nav button span:last-child,.welcome-chip,.welcome-subtitle,.welcome-footnote,label,.small,.btnlink,p,.emergency-call span span').forEach(node => {
+        if (node.children.length) return;
         if (!node.dataset.originalText) node.dataset.originalText = node.textContent;
         node.textContent = text[node.dataset.originalText] || node.dataset.originalText;
+    });
+    document.querySelectorAll('#mode option').forEach(option => {
+        if (!option.dataset.originalText) option.dataset.originalText = option.textContent;
+        option.textContent = text[option.dataset.originalText] || option.dataset.originalText;
     });
     document.querySelectorAll('input[placeholder],textarea[placeholder]').forEach(node => {
         if (!node.dataset.originalPlaceholder) node.dataset.originalPlaceholder = node.placeholder;
@@ -3530,6 +3621,7 @@ function setUiLanguage(language) {
         }[node.dataset.originalPlaceholder] || node.dataset.originalPlaceholder) : node.dataset.originalPlaceholder;
     });
     ['uiLanguage', 'uiLanguageQuick'].forEach(id => { const selector = document.getElementById(id); if (selector) selector.value = selected; });
+    document.querySelectorAll('.activity-overlay-toggle').forEach(button => { button.textContent = selected === 'hi' ? 'व्यस्त / खाली क्षेत्र' : 'Busy / empty areas'; });
 }
 function initLocalSafetyFeatures() {
     try {

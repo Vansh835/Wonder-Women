@@ -11,6 +11,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -42,7 +46,7 @@ import org.json.JSONTokener;
 import java.net.URI;
 import java.util.ArrayList;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends Activity implements SensorEventListener {
     private static final String PREFS = "phone_api_settings";
     private static final String KEY_BASE = "base_url";
     private static final String KEY_TOKEN = "pairing_token";
@@ -58,11 +62,17 @@ public final class MainActivity extends Activity {
     private GeolocationPermissions.Callback pendingLocationCallback;
     private String pendingLocationOrigin;
     private SpeechRecognizer speechRecognizer;
+    private SensorManager sensorManager;
+    private Sensor accelerometer;
+    private long lastShakeAt;
+    private float lastAcceleration;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+        if (sensorManager != null) accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         setContentView(createLayout());
         configureWebView();
         if (!getBaseUrl().isEmpty()) updateConnectionLabel();
@@ -182,6 +192,12 @@ public final class MainActivity extends Activity {
 
     private final class CheckInBridge {
         @JavascriptInterface
+        public void setShakeSOS(boolean enabled) {
+            preferences.edit().putBoolean("shake_sos", enabled).apply();
+            runOnUiThread(() -> { if (enabled) registerShakeSensor(); else unregisterShakeSensor(); });
+        }
+
+        @JavascriptInterface
         public String startVoiceRecognition(String language) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION_REQUEST));
@@ -242,6 +258,39 @@ public final class MainActivity extends Activity {
             } catch (Exception ignored) { }
         }
     }
+
+    private void registerShakeSensor() {
+        if (sensorManager != null && accelerometer != null)
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+    }
+
+    private void unregisterShakeSensor() {
+        if (sensorManager != null) sensorManager.unregisterListener(this);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (preferences != null && preferences.getBoolean("shake_sos", false)) registerShakeSensor();
+    }
+
+    @Override protected void onPause() {
+        unregisterShakeSensor();
+        super.onPause();
+    }
+
+    @Override public void onSensorChanged(SensorEvent event) {
+        if (event.sensor.getType() != Sensor.TYPE_ACCELEROMETER || webView == null) return;
+        float x = event.values[0], y = event.values[1], z = event.values[2];
+        float acceleration = (float) Math.sqrt(x * x + y * y + z * z);
+        long now = System.currentTimeMillis();
+        if (acceleration > 24f && lastAcceleration < 16f && now - lastShakeAt > 1800) {
+            lastShakeAt = now;
+            runOnUiThread(() -> webView.evaluateJavascript("window.triggerShakeSOS && window.triggerShakeSOS()", null));
+        }
+        lastAcceleration = acceleration;
+    }
+
+    @Override public void onAccuracyChanged(Sensor sensor, int accuracy) { }
 
     private void beginNativeSpeech(String language) {
         if (speechRecognizer != null) {
