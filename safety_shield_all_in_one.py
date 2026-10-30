@@ -1120,6 +1120,7 @@ HTML_TEMPLATE = r"""
     .swap-btn { background: #3d3d4f !important; padding: 7px 10px !important; font-size: 13px; }
     .swap-btn:hover { background: #505068 !important; }
     .go-btn { padding: 8px 14px !important; font-size: 13px; white-space: nowrap; }
+    .location-route-btn { width: 100%; padding: 9px 12px; text-align: left; background: #235b57; }
 
     .chat-box { flex-grow: 1; min-height: 100px; background: var(--surface-bg); border-radius: 10px; padding: 15px; overflow-y: auto; margin-bottom: 10px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; border: 1px solid var(--line); }
     .message { padding: 10px 14px; border-radius: 8px; max-width: 88%; line-height: 1.4; white-space: pre-wrap; }
@@ -1209,6 +1210,7 @@ HTML_TEMPLATE = r"""
         .quick-route-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
         .quick-route-row select { min-width: 0; width: 100%; }
         .quick-route-row .go-btn { grid-column: 1 / -1; width: 100%; }
+        .location-route-btn { min-height: 50px; font-size: 15px; }
         .chat-box { min-height: 0; padding: 10px; font-size: 13px; }
         .message { max-width: 96%; }
         .input-area { flex-wrap: wrap; gap: 6px; }
@@ -1267,7 +1269,7 @@ HTML_TEMPLATE = r"""
     <!-- Quick Route A & B Dropdown Selector -->
     <div class="quick-route-bar">
         <div class="quick-route-title">
-            <span>Quick Safest Route (Delhi Places)</span>
+            <span>Quick Safest Route</span>
         </div>
         <div class="quick-route-row">
             <select id="pointA" title="Start point (A)"></select>
@@ -1275,6 +1277,7 @@ HTML_TEMPLATE = r"""
             <select id="pointB" title="Destination point (B)"></select>
             <button class="go-btn" onclick="planFromDropdowns()">Find Route</button>
         </div>
+        <button class="location-route-btn" type="button" onclick="planFromCurrentLocation()">&#x1F4CD; Route from my current location</button>
     </div>
 
     <div class="chat-box" id="chatBox"></div>
@@ -1479,6 +1482,44 @@ async function planFromDropdowns() {
     await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode);
 }
 
+async function planFromCurrentLocation() {
+    const destination = document.getElementById('pointB').value;
+    const mode = document.getElementById('mode').value;
+    const button = document.querySelector('.location-route-btn');
+    if (!destination) {
+        addMsg('ai', 'Choose a destination first, then request a route from your current location.', 'alert-msg');
+        return;
+    }
+    if (!navigator.geolocation) {
+        addMsg('ai', 'Location is not available in this browser or app window.', 'alert-msg');
+        return;
+    }
+    const oldLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Getting your location...';
+    const status = addMsg('ai', 'Requesting permission to use your current location...');
+    try {
+        const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+            resolve,
+            error => reject(new Error(error.code === 1
+                ? 'Location permission was denied. Allow location access and try again.'
+                : error.code === 3 ? 'Location lookup timed out. Check your location settings and try again.'
+                    : 'Could not get your location. Check that location services are enabled.')),
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+        ));
+        const coords = { lat: position.coords.latitude, lon: position.coords.longitude };
+        status.textContent = 'Location found. Finding route options...';
+        addMsg('user', 'Current location to ' + destination + ' (' + mode.toLowerCase() + ')');
+        await planRoute('Your current location', destination + ', Delhi, India', mode, null, coords);
+    } catch (error) {
+        status.textContent = error.message || 'Could not get your location.';
+        status.classList.add('alert-msg');
+    } finally {
+        button.disabled = false;
+        button.textContent = oldLabel;
+    }
+}
+
 /* ---------- map (Leaflet + OpenStreetMap data, no API key) ---------- */
 function pin(letter, cls) {
     return L.divIcon({ className: '', html: '<div class="pin ' + (cls || '') + '">' + letter + '</div>',
@@ -1505,7 +1546,7 @@ function clearMap() {
 }
 
 /* ---------- route flow (routing + scoring happen in Python) ---------- */
-async function planRoute(origin, destination, mode, departureTime) {
+async function planRoute(origin, destination, mode, departureTime, originCoords) {
     if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
     clearMap();
     const status = addMsg('ai', 'Checking the places and route from ' + origin + ' to ' + destination + '.');
@@ -1513,7 +1554,8 @@ async function planRoute(origin, destination, mode, departureTime) {
     try {
         const resp = await fetch('/plan_route', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ origin, destination, mode, departure_time: departureTime || null, session_id: SESSION_ID })
+            body: JSON.stringify({ origin, destination, mode, departure_time: departureTime || null,
+                origin_coords: originCoords || null, session_id: SESSION_ID })
         });
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
@@ -2018,6 +2060,7 @@ MOBILE_HTML_TEMPLATE = r"""
     .swap-btn:hover { background: #505068 !important; }
     .swap-label { display: none; }
     .go-btn { padding: 8px 14px !important; font-size: 13px; white-space: nowrap; }
+    .location-route-btn { width: 100%; padding: 9px 12px; text-align: left; background: #235b57; }
 
     .chat-box { flex-grow: 1; min-height: 100px; background: var(--surface-bg); border-radius: 10px; padding: 15px; overflow-y: auto; margin-bottom: 10px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; border: 1px solid var(--line); }
     .message { padding: 10px 14px; border-radius: 8px; max-width: 88%; line-height: 1.4; white-space: pre-wrap; }
@@ -2116,6 +2159,7 @@ MOBILE_HTML_TEMPLATE = r"""
         .quick-route-row .swap-btn { width: 100%; }
         .swap-label { display: inline; margin-left: 6px; }
         .quick-route-row .go-btn { grid-column: 1 / -1; width: 100%; min-height: 50px; }
+        .location-route-btn { min-height: 50px; font-size: 15px; }
         .chat-box { flex: 1 1 auto; min-height: 0; padding: 14px 12px; font-size: 15px; border-radius: 16px; }
         .message { max-width: 96%; }
         .input-area { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, auto); gap: 8px; padding: 8px; border-radius: 16px; }
@@ -2211,13 +2255,14 @@ MOBILE_HTML_TEMPLATE = r"""
 
     <!-- Quick Route A & B Dropdown Selector -->
     <details class="quick-route-bar">
-        <summary class="quick-route-title"><span>Quick route</span><span>Choose saved places</span></summary>
+        <summary class="quick-route-title"><span>Quick route</span><span>Saved places or current location</span></summary>
         <div class="quick-route-row">
             <select id="pointA" title="Start point (A)"></select>
             <button class="swap-btn" onclick="swapDropdownPlaces()" title="Swap Start & Destination" aria-label="Swap start and destination"><span aria-hidden="true">&#x21C4;</span><span class="swap-label">Swap start and destination</span></button>
             <select id="pointB" title="Destination point (B)"></select>
             <button class="go-btn" onclick="planFromDropdowns()">Find Route</button>
         </div>
+        <button class="location-route-btn" type="button" onclick="planFromCurrentLocation()">&#x1F4CD; Route from my current location</button>
     </details>
 
     <div class="chat-box" id="chatBox"></div>
@@ -2428,6 +2473,44 @@ async function planFromDropdowns() {
     await planRoute(a + ', Delhi, India', b + ', Delhi, India', mode);
 }
 
+async function planFromCurrentLocation() {
+    const destination = document.getElementById('pointB').value;
+    const mode = document.getElementById('mode').value;
+    const button = document.querySelector('.location-route-btn');
+    if (!destination) {
+        addMsg('ai', 'Choose a destination first, then request a route from your current location.', 'alert-msg');
+        return;
+    }
+    if (!navigator.geolocation) {
+        addMsg('ai', 'Location is not available in this browser or app window.', 'alert-msg');
+        return;
+    }
+    const oldLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Getting your location...';
+    const status = addMsg('ai', 'Requesting permission to use your current location...');
+    try {
+        const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+            resolve,
+            error => reject(new Error(error.code === 1
+                ? 'Location permission was denied. Allow location access and try again.'
+                : error.code === 3 ? 'Location lookup timed out. Check your location settings and try again.'
+                    : 'Could not get your location. Check that location services are enabled.')),
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+        ));
+        const coords = { lat: position.coords.latitude, lon: position.coords.longitude };
+        status.textContent = 'Location found. Finding route options...';
+        addMsg('user', 'Current location to ' + destination + ' (' + mode.toLowerCase() + ')');
+        await planRoute('Your current location', destination + ', Delhi, India', mode, null, coords);
+    } catch (error) {
+        status.textContent = error.message || 'Could not get your location.';
+        status.classList.add('alert-msg');
+    } finally {
+        button.disabled = false;
+        button.textContent = oldLabel;
+    }
+}
+
 /* ---------- map (Leaflet + OpenStreetMap data, no API key) ---------- */
 function pin(letter, cls) {
     return L.divIcon({ className: '', html: '<div class="pin ' + (cls || '') + '">' + letter + '</div>',
@@ -2454,7 +2537,7 @@ function clearMap() {
 }
 
 /* ---------- route flow (routing + scoring happen in Python) ---------- */
-async function planRoute(origin, destination, mode) {
+async function planRoute(origin, destination, mode, departureTime, originCoords) {
     if (!map) { addMsg('ai', 'The map is not ready. Check your internet connection.', 'alert-msg'); return; }
     clearMap();
     const status = addMsg('ai', 'Finding routes and checking places along each one. The first trip in a new area can take up to a minute; later trips there are much faster...');
@@ -2462,7 +2545,8 @@ async function planRoute(origin, destination, mode) {
     try {
         const resp = await fetch('/plan_route', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ origin, destination, mode })
+            body: JSON.stringify({ origin, destination, mode, departure_time: departureTime || null,
+                origin_coords: originCoords || null, session_id: SESSION_ID })
         });
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Route lookup failed.');
@@ -5554,7 +5638,20 @@ def plan_route():
         return jsonify({"error": "Please give both a start and a destination."}), 400
 
     try:
-        a = geocode(origin)
+        origin_coords = p.get("origin_coords")
+        if origin_coords is not None:
+            if not isinstance(origin_coords, dict):
+                return jsonify({"error": "The current location could not be read. Please try again."}), 400
+            try:
+                lat = float(origin_coords.get("lat"))
+                lon = float(origin_coords.get("lon"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "The current location could not be read. Please try again."}), 400
+            if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
+                return jsonify({"error": "The current location could not be read. Please try again."}), 400
+            a = {"lat": lat, "lon": lon, "display_name": "Your current location"}
+        else:
+            a = geocode(origin)
         b = geocode(destination)
     except OutsideArea as exc:
         return jsonify({"error": area_only_text("en", str(exc)), "outside_area": True,
